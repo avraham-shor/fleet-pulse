@@ -310,3 +310,194 @@ lint` (clean), `npm run build` (`tsc -b` across both projects + `vite build`, cl
 `npm start` end-to-end (server + Vite dev proxy, `/api` and `/ws` both forwarding),
 and manual REST/WS/SSE smoke checks including the PATCH-race window firing correctly
 under a live concurrent request.
+
+## Story 1.3 — Wire contract types and the transport layer
+
+**Handler injection over direct store import, as the story's Design Notes call for.**
+`ws-manager`, `sse-manager`, and `api-client` all take their store-facing seams as
+constructor options (`onMessage`, `onConnect`, `onBatch`, `getDispatcherId`) rather
+than importing `store/` or each other — that module doesn't exist until stories 4/6/7/8.
+The same seams double as the test-injection points (fake `WebSocketLike`/
+`EventSourceLike`/`fetch`), so the three modules are fully unit-testable now without a
+live socket, a live server, or a browser. `api-client`'s `getDispatcherId: () => string
+| null` is a deliberate exception to "never import a peer transport module directly" —
+AD-17 ties the two together explicitly (api-client reads ws-manager's session field),
+so a later `app/` composition root just passes `wsManager.getDispatcherId` in; nothing
+about that coupling needed store to exist first.
+
+**`WebSocketLike`/`EventSourceLike` are minimal structural interfaces, not the DOM
+lib's real types.** Both managers accept a `createSocket`/`createEventSource` factory
+defaulting to the real global constructor, cast once (`as unknown as WebSocketLike`) at
+that single call site — the rest of each module only ever touches the narrow interface.
+Node 24's global `WebSocket` exists (confirmed: `typeof WebSocket === 'function'`) but
+global `EventSource` does not, so `sse-manager`'s tests always inject a fake; real usage
+is browser-only, which is where `EventSource` actually lives.
+
+**`registered` and `pong` are consumed by `ws-manager` internally, never forwarded via
+`onMessage`.** AD-17 says the client's own identity is session state, not presence — so
+`registered` isn't a presence event a later store slice should see the way
+`dispatcher_joined` is; `pong` is pure keepalive plumbing. Both are intercepted before
+the generic dispatch, so `onMessage`'s effective contract is "every server→client event
+except the two ws-manager owns outright."
+
+**Exhaustiveness against `contract/ws-server.ts`'s union, enforced by the compiler, not
+a comment.** `ws-manager`'s "known server message type" set is written as `{ registered:
+true, ... } satisfies Record<ServerWsMessage['type'], true>` rather than a bare
+`Set([...])` literal — adding a tenth WS message type to the contract without updating
+this object is now a compile error instead of a silently-dropped-as-unknown message at
+runtime.
+
+**`TransportFailure`'s `error` kind carries two failure modes the brief never named:**
+`not_registered` (the FR-16 local refusal) and `network_error`/`invalid_response`
+(a thrown `fetch` or an unparsable JSON body). AD-7's Consistency Conventions row fixes
+exactly three kinds (`conflict`/`retryable`/`error`) but only describes what
+*populates* `error` for a real HTTP failure; a local refusal and a transport-level
+failure both still need a slot, and reusing `error` (with a synthesized `ApiErrorBody`)
+was cheaper and more consistent for callers than a fourth union member — "nothing above
+transport sees a raw Response or thrown fetch error" reads as "everything degrades to
+the union," not "the union has exactly the codes the brief mentions." (AD-7, FR-16)
+
+**`GET /api/fleet` is not gated by the unregistered-mutation refusal.** `server.js`
+never calls `requireDispatcher` for this endpoint (server.js:840-850) and FR-25 scopes
+the breaker to the fleet endpoint specifically — `api-client.getFleet()` sends no
+`X-Dispatcher-Id` and is callable with no live registration, matching FR-16's own
+wording ("mutations disabled... viewing continues"): a fleet fetch is viewing, not a
+mutation.
+
+**Breaker: only 503 counts toward the 3-strike threshold; `Retry-After` is read only
+from the header.** A non-503 failure (5xx other than 503, or a thrown `fetch`) is
+returned as `{kind:'error'}` immediately, without incrementing the consecutive-failure
+counter and without auto-retrying — FR-25's own wording is "three consecutive failed
+HTTP attempts returning 503," not "any failure." `parseRetryAfterSeconds` never calls
+`res.json()` on a 503; a dedicated test (`make503NoBodyRead`) makes `.json()` throw if
+ever invoked, proving the header-only path holds. One accepted edge case: if a *probe*
+attempt (breaker already open) fails with a non-503 status, `nextProbeAtMs` is not
+rescheduled (only a 503 probe result reschedules it) — the next `getFleet()` call
+immediately retries rather than waiting out the interval again. Undocumented in the
+spec either way; left as the more responsive choice since server.js's `/api/fleet` only
+ever actually returns 200 or 503, making the case unreachable against the real server.
+
+**`shared/constants.js`'s `Object.freeze`d exports infer literal property types.**
+`let currentBackoffMs = CLIENT_THRESHOLDS.RECONNECT_BACKOFF_INITIAL_MS` inferred the
+literal type `1000`, not `number` — TypeScript special-cases object literals passed
+directly to `Object.freeze()` similarly to `as const`. Doubling the value later then
+failed to typecheck. Fixed with an explicit `: number` annotation at each such
+declaration (`ws-manager.ts`, `sse-manager.ts`, and the matching test files) rather than
+changing `shared/constants.js` itself — the freeze is intentional (AD-2) and the fix
+belongs at the narrow read site, not the shared module.
+
+**Manual proxy smoke test (spine's explicit instruction for "the first transport
+story").** `app/` doesn't exist yet, so there's no real browser client to drive through
+DevTools; verified at the protocol level instead: ran `npm start`, curled
+`http://localhost:5173/api/telemetry/stream` through the Vite proxy and confirmed live
+`TelemetryBatch`-shaped frames; force-killed the underlying `node --watch server.js`
+process mid-stream and confirmed the curl'd stream stopped receiving frames (the proxy
+propagates the upstream loss); confirmed the server process self-restarted (Node's
+`--watch` crash-recovery) and a fresh curl to the same proxied URL immediately resumed
+receiving frames — the same connect/lose/reconnect cycle `sse-manager`'s backoff loop
+is built to drive, exercised end-to-end through the real dev proxy. Also ran a real WS
+round trip through `ws://localhost:5173/ws` (`register_dispatcher` → `registered` →
+`dispatcher_joined` (system) → `ping` → `pong`), confirming the `/ws` proxy rule and
+`ws-client.ts`'s shapes against the live server, not just the contract test.
+
+**Deferred, on purpose:** actually wiring `ws-manager`'s `onConnect`/`onMessage`,
+`sse-manager`'s `onBatch`, and `api-client`'s `getDispatcherId` together and into a
+running store is `app/`'s job once `store/`/`pipeline/` exist (stories 4/6/7/8) — this
+story ships all three modules connection-correct and independently testable via the
+injected seams, per its own Design Notes. No `shared/constants.js` additions and no new
+npm dependencies, as required — all six transport tunables already existed from stories
+1.1/1.2.
+
+Verified: `npm test` (65/65, all green, re-run twice back to back with no flake — every
+new test is driven by injected/fake clocks and sockets, no real timers or network),
+`npm run lint` (clean, `--max-warnings 0`), `npm run build` (`tsc -b` across both
+projects + `vite build`, clean), plus the manual proxy smoke test above.
+
+### Code review pass (three layers: blind-hunter, edge-case-hunter, verification-gap)
+
+Adversarial review against this story's diff. 8 findings classified `patch` (real,
+in-scope, trivially fixable); 2 more classified real-but-out-of-scope and logged to
+`deferred-work.md` instead (no current caller to be affected by either: no de-dup guard
+against overlapping concurrent `getFleet()` calls, no injected payload-validation seam
+in `api-client` per the architecture's `validators` module convention). All 8 patch
+findings applied:
+
+- **`api-client.ts` breaker streak reset.** `getFleet()`'s closed-state loop only
+  skipped incrementing `consecutiveFailures` on a non-503 failure, never reset it to 0
+  — so `503, non-503, 503, 503` across separate calls could open the breaker on what
+  were only two truly consecutive 503s. Fixed: the non-retryable branch now resets the
+  counter before returning. New test drives exactly that five-response sequence across
+  two `getFleet()` calls and asserts the breaker never opens and all five queued
+  responses are consumed (a buggy implementation would open on the streak's would-be
+  third 503 and never reach the queued success).
+- **`api-client.ts` `parseRetryAfterSeconds()` null-header bug.** `Number(null) === 0`
+  in JS, so a genuinely missing `Retry-After` header returned `0` instead of falling
+  back to the breaker's probe interval — only a non-numeric header (`NaN`) fell back
+  correctly before. Fixed with an explicit `header === null` check ahead of the
+  `Number()` conversion. New test asserts a 503 with no `Retry-After` header at all
+  falls back to `BREAKER_PROBE_INTERVAL_MS / 1000`.
+- **`api-client.ts` 409 body cast.** The conflict branch of `mutate()` cast the parsed
+  body straight to `ConflictErrorBody` after only checking it parsed to non-null, unlike
+  `readErrorBody()`'s own shape check a few lines away. Added `isConflictErrorBodyShape`
+  (reusing a new shared `isApiErrorBodyShape` helper `readErrorBody` now also uses),
+  falling back to `invalidResponseFailure` when a 409 body doesn't actually carry
+  `conflictingDispatcher`/`currentRoute`. New test sends a 409 with a body missing both
+  fields and asserts it degrades to `{kind:'error', body:{error:'invalid_response'}}`
+  rather than being trusted as-is.
+- **`api-client.ts` `forceNextProbe()`.** AD-8/FR-33 assign the future `fleet_reset`
+  sequence the job of "probing immediately if the breaker is open," but nothing in this
+  module's public surface could bypass the scheduled probe time. Added
+  `forceNextProbe()` (sets `nextProbeAtMs = -Infinity`, guaranteeing the next
+  `getFleet()` call's schedule check is always false regardless of the injected clock)
+  and exported it on `ApiClient`. New test opens the breaker, confirms a same-instant
+  `getFleet()` still short-circuits locally, then calls `forceNextProbe()` and confirms
+  the very next call hits the network and can close the breaker.
+- **`ws-manager.ts` ping/pong RTT and reconnect count.** Both AD-8/constants.md (RTT
+  feeds FR-30's latency metric) and FR-30 itself (reconnection counts for the future
+  observability panel) were named but never captured — the `pong` branch discarded the
+  round trip, and nothing counted reconnects. Added an injected `now` option (default
+  `Date.now`, mirroring `api-client`'s existing pattern rather than depending on
+  vitest's own `Date` faking), `lastPingSentAtMs`/`lastPingRttMs` state, and
+  `getLastPingRttMs()`; added a `reconnectCount` incremented only where
+  `scheduleReconnect()`'s timer actually fires (never on the initial `connect()`), and
+  `getReconnectCount()`. New tests cover both with an injected clock for exact RTT
+  values and a real backoff-driven sequence for the reconnect count.
+- **`sse-manager.ts` reconnect count.** Same gap as ws-manager's, same fix:
+  `reconnectCount` incremented only when a scheduled timer reopens the `EventSource`,
+  exposed via a new `getReconnectCount()`. New test mirrors ws-manager's.
+- **`sse-manager.ts` dropped-message count.** Had `onDroppedMessage` but no internal
+  counter/getter, unlike ws-manager's `getDroppedMessageCount()` — same AD-8/FR-33
+  concern, asymmetric coverage. Added a matching `droppedMessageCount` counter and
+  `getDroppedMessageCount()`, incremented in both of `handleRawFrame`'s failure
+  branches. Existing malformed-frame test extended to assert the count instead of
+  adding a whole new test (mirroring the FR-33 test in ws-manager's own suite).
+- **Stale backoff on `close()` then `connect()` again.** `currentBackoffMs` was only
+  ever reset to the initial value inside a successful `onopen` — not by `connect()`
+  itself — so `close()` after an escalated backoff, followed by a fresh `connect()`
+  whose first attempt also failed, would reconnect on the stale elevated delay instead
+  of restarting the curve. Fixed in both managers by resetting `currentBackoffMs` inside
+  the public `connect()` method, placed *after* the existing idempotency guard
+  (`if (socket/source !== null || reconnectTimer !== null) return`) rather than before
+  it — resetting before the guard would also fire on a call that's a no-op (already
+  connected, or a reconnect already pending), which would corrupt an in-progress
+  backoff escalation the pending reconnect hasn't used yet. Functionally identical for
+  the reported bug (`close()` always clears both guard conditions first) and safer for
+  the guarded case. New test in both managers escalates the backoff, closes, reconnects,
+  fails once more, and asserts the very next retry waits only the initial delay.
+- **No test coverage for the `socket !== mySocket`/`source !== mySource` stale-callback
+  guards** (added during this story's own self-review, DECISIONS.md/PROMPTS.md Entry 4)
+  — the verification-gap reviewer proved this empirically by deleting the guards and
+  rerunning the suite with all tests still green. Added one test per manager: trigger a
+  real reconnect (so a second fake socket/source exists), then invoke the *original*
+  fake's own `onopen`/`onmessage`/`onclose` (WS) or `onopen`/`onmessage` (SSE) handler
+  references directly — bypassing the fake's own close()-state bookkeeping, since the
+  point is simulating a late event on a reference the manager has already moved past —
+  and assert zero observable state change (no extra `onConnect`, no `onMessage`
+  forwarding, dropped/reconnect counts and `dispatcherId` untouched, no new socket
+  created). Re-verified empirically in the same way the reviewer did: temporarily
+  stripped both guards from a copy of each file, confirmed exactly the new stale-callback
+  test failed (and only that one) in each file, then restored the originals byte-for-byte
+  (`diff` confirmed identical) before re-running the full suite clean.
+
+Verified after all 8 patches: `npm test` (76/76, re-run twice with no flake), `npm run
+lint` (clean, `--max-warnings 0`), `npm run build` (`tsc -b` + `vite build`, clean).

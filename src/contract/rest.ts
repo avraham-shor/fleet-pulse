@@ -100,6 +100,42 @@ export interface ResetAckBody {
   reset: true
 }
 
+// --- Request bodies (client -> server) --------------------------------
+//
+// Story 1.3's half of AD-13: the four mutating REST endpoints' bodies.
+// Header fields (`X-Dispatcher-Id`, `If-Match`) are transport concerns
+// (api-client, AD-7), not part of these body shapes. Field names mirror
+// server.js's actual `req.body?.*` reads exactly (server.js:868-869 POST
+// /api/routes, :907 PATCH status, :940 PUT reassign truckId, :965 POST
+// alert message).
+
+/** `POST /api/routes` body — creates a route and assigns it to a truck
+ * (FR-10). No version to check (a create has none yet); FR-34's
+ * warn-and-confirm covers the "truck already has an active route" race
+ * client-side instead. */
+export interface CreateRouteRequestBody {
+  truckId: string
+  destination: string
+}
+
+/** `PATCH /api/routes/:routeId` body — a status transition (FR-11), version-
+ * checked via `If-Match` (FR-12). */
+export interface UpdateRouteStatusRequestBody {
+  status: RouteStatus
+}
+
+/** `PUT /api/routes/:routeId/reassign` body — moves the route to a
+ * different truck (FR-14), version-checked via `If-Match` (FR-12). */
+export interface ReassignRouteRequestBody {
+  truckId: string
+}
+
+/** `POST /api/fleet/:truckId/alert` body — sends a dispatcher-authored
+ * alert to a truck (FR-22), broadcast to all dispatchers (FR-32). */
+export interface SendTruckAlertRequestBody {
+  message: string
+}
+
 // Deterministic quirk triggers are dev-only and quarantined by AD-11: their
 // ack body is intentionally not declared here — src/contract/ is the
 // client-facing production contract, and nothing under src/ references the
