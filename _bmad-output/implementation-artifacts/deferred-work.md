@@ -1,0 +1,3 @@
+- source_spec: `_bmad-output/specs/spec-Fleet-Pulse/stories/1-repo-scaffold-and-the-shared-constants-module.md`
+  summary: Make `vite.config.ts`'s dev-proxy targets (`/api`, `/ws`, currently hardcoded to `http://localhost:3000` / `ws://localhost:3000`) follow the server's port instead of a literal.
+  evidence: The architecture's Config convention reserves env vars for "the server port fallback," implying `server.js` will read its port from an env var (story 1.2). The Vite proxy target should track that same value so the two never drift, but the env var doesn't exist yet — fixing this now would mean guessing its name/default ahead of the story that defines it. Blind-hunter review flagged the hardcoded literals during story 1.1.
