@@ -10,8 +10,10 @@ for AD-* definitions and `_bmad-output/specs/spec-Fleet-Pulse/requirements.md` f
   `package.json`/`tsconfig`/`vite.config.ts`, since the architecture spine pins exact
   versions to "the live scaffold's" output (TypeScript ~6.0.2, Vite 8.2.1) rather than to
   hand-picked ones. Verified installed versions match the spine's Stack table exactly:
-  React 19.2.8, Vite 8.2.1, TypeScript ~6.0.2, Zustand 5.0.15, Vitest 4.1.10, Express
-  5.2.1, `ws` 8.21.3, concurrently 10.0.5, `@testing-library/react` 16.3.2. (AD-2, Stack)
+  React 19.2.8, Vite 8.2.1, Zustand 5.0.15, Vitest 4.1.10, Express
+  5.2.1, `ws` 8.21.3, concurrently 10.0.5, `@testing-library/react` 16.3.2. TypeScript
+  resolves to 6.0.3 in the lockfile, inside the spine's `~6.0.2` pin (corrected during
+  code review — this entry previously overstated it as matching "exactly"). (AD-2, Stack)
 - **`shared/constants.js` shape.** Two named exports, `CLIENT_THRESHOLDS` and
   `SERVER_PARAMS`, mirroring `constants.md`'s two tables exactly, values unchanged from
   the spec. Plain ESM object literals per AD-2; `package.json` already carries
@@ -109,3 +111,74 @@ development trail CAP-10 and G5 explicitly want graded ("the graded artifact is 
 whole repository, not just the running app"). `DECISIONS.md` already references these
 paths directly (e.g. `_bmad-output/specs/spec-Fleet-Pulse/constants.md`); excluding the
 directory would break every one of those references for a reviewer cloning the repo.
+
+### Code review pass (four layers: blind-hunter, edge-case-hunter, verification-gap, acceptance-auditor)
+
+Adversarial review against commit `ff88679`. 6 decision-needed findings, 20 patch
+findings, 7 deferred, 6 dismissed as noise. Full findings recorded in the story file's
+Review Findings section. All 6 decisions resolved and all 26 resulting patches applied
+in this pass:
+
+- **`constants.md` + `shared/constants.js`** — added the constants AD-8, AD-3, and
+  `constants.md`'s own text required but the module lacked: `WS_KEEPALIVE_PING_MS`
+  (15 s), `STALENESS_TICK_MS` (1 s), `RECONNECT_BACKOFF_MULTIPLIER` (2),
+  `BREAKER_FAILURE_THRESHOLD` (3), `FLEET_503_RETRY_AFTER_S` (3 s). Spec updated first,
+  then code, per AD-2. Also added `SERVER_PARAMS.SERVER_PORT` (3000) so the port is no
+  longer a literal living outside the module (was flagged as an AD-2 violation inside
+  this story's own diff — `vite.config.ts` now imports it instead of hardcoding `3000`
+  twice). A units-convention header comment was added (`_MS`/`_KMH`/`_PCT`/`_CHANCE`/`_S`).
+- **`shared/constants.test.js`** — rewritten from 5 to 16 cases: explicit expected-key-set
+  assertions per group (catches a deleted or renamed constant, demonstrated to slip past
+  the old shape test); `Object.isFrozen` assertions on both exports; positivity and
+  0..1-range checks; the two cross-boundary pairings the "Pairing rule" exists to protect
+  (`FUEL_SUSPECT_WINDOW_MS` > glitch max; staleness threshold = 5× telemetry tick); the
+  two previously-unchecked MIN/MAX pairs; and a stuck-speed truck-id format + fleet-bounds
+  check. Rejected in the original pass as "over-engineering for a scaffold smoke test" —
+  reversed once the review demonstrated each gap concretely with a real passing-when-it-
+  shouldn't test run.
+- **`tsconfig.app.json` / `tsconfig.node.json`** — added `"strict": true` to both (verified:
+  compiles clean at zero cost today); added `"checkJs": true` to both (the earlier
+  "compiler coverage" claim for `shared/` was false without it — `allowJs` alone only
+  admits `.js` files to the program, it doesn't check them); restored `"DOM.Iterable"` to
+  `tsconfig.app.json`'s `lib` (present in the stock `create-vite` template, dropped by
+  this story's tsconfig edit); added `"shared"` to `tsconfig.node.json`'s `include` (now
+  needed because `vite.config.ts` imports `shared/constants.js`).
+- **`vite.config.ts`** — imports `SERVER_PARAMS.SERVER_PORT` instead of hardcoding `3000`
+  twice; added `changeOrigin: true` to the `/ws` rule (was asymmetric with `/api`, which
+  had it already — an origin check added later would reject dev WS traffic); tightened
+  `/api` to `/api/` since Vite proxy keys match by prefix, not path segment.
+- **`package.json`** — narrowed `engines.node` to `^24.15.0` (was `>=24.15.0`, silently
+  admitting 25.x/26.x; `jsdom@30` already rejects 25.x, and this machine runs 25.6.1, so
+  expect an `EBADENGINE` warning on install until it's on 24.x); added
+  `--kill-others-on-fail` to the `concurrently` `start` script (a crashing/hung leg no
+  longer leaves the other running with a masked exit code); added `--max-warnings 0` to
+  `npm run lint` (warnings were accumulating invisibly — `react/only-export-components`
+  is configured as `warn`).
+- **`.gitignore`** — `.env` + `.env.*` replaces `.env`/`.env.local` (now also covers
+  `.env.production`/`.env.development`, which nothing previously matched); added
+  `coverage`.
+- **`README.md`** — fixed a duplicate top-level heading (`# FleetPulse` and
+  `# React + TypeScript + Vite` both `H1`; the template section is now `H2`/`H3`); added
+  `npm run lint` and `npm run build` to the Run It block (both are part of the green bar
+  this story records, neither was documented).
+- **`ARCHITECTURE-SPINE.md`** — the Structural Seed file tree named `docs/` at repo root;
+  the project never adopted that directory, tracking `_bmad-output/` instead (see the
+  `.gitignore` scope decision above). Updated the seed to say `_bmad-output/`, reconciling
+  a disagreement between the architecture and the actual tree that had no recorded
+  decision.
+- **`PROMPTS.md`** (new, repo root) — CAP-10 requires it "maintained throughout, not
+  reconstructed at the end"; it was previously deferred to story 1.10, which is exactly
+  that failure mode. Created now, seeded with story 1.1's build entry and this review
+  pass's entry.
+- **`deferred-work.md`** — narrowed the stale proxy-port deferral: the literal itself is
+  fixed now (`SERVER_PARAMS.SERVER_PORT`); only the env-var *override*, which needs
+  `server.js` to exist, remains deferred to story 1.2.
+- **Commit message — not amended.** The acceptance-auditor finding read only
+  `ff88679`'s subject line and concluded no FR/NFR/AD was cited; the full message body
+  already reads "...server emission parameter (AD-2)." Caught this while carrying out
+  the amend and skipped it — a no-op amend would have been pointless, and `NFR-9`
+  (extensibility registries) doesn't actually fit this commit's content, so it was
+  dropped from consideration too rather than force-added.
+
+Re-ran `npm test` (16/16), `npm run build`, `npm run lint` after every patch in this
+pass — all green throughout.

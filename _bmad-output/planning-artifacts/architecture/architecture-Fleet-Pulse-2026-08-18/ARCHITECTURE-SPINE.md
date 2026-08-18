@@ -228,7 +228,7 @@ Fleet-Pulse/
     store/             # slices: fleet, routes, presence, health, obs; batched commit (AD-5, AD-9)
     ui/                # widget registry, error boundaries, SVG grid/sparklines, TrustBadge (AD-6, AD-14)
     app/               # composition root: wires transport→pipeline→store, mounts widgets
-  README.md  DECISIONS.md  PROMPTS.md  docs/ (PRD + addendum + this spine)
+  README.md  DECISIONS.md  PROMPTS.md  _bmad-output/ (PRD + addendum + this spine)
 ```
 
 `npm start` = `concurrently` (node server.js + Vite dev, Vite proxying `/api` and `/ws` — exact prefixes, never a catch-all `ws: true` rule, which would break HMR's own WebSocket — to :3000 so client paths are same-origin; smoke-test EventSource disconnect through the proxy in the first transport story, per AD-12's reaping rule). `npm test` = `vitest run`. Local-only: no deploy, no persistence, no CI — the submission runs on the evaluator's machine. The submission itself is a Git repository (`git init` is the first build step); commits reference FR ids.

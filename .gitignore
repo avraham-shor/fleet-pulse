@@ -10,11 +10,14 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+coverage
 *.local
 
-# Local env overrides
+# Local env overrides — every mode-specific file (.env.local,
+# .env.production, .env.development, ...), not just the two Vite loads by
+# default
 .env
-.env.local
+.env.*
 
 # BMad tooling (skill/agent machinery, not this project's own content).
 # _bmad-output/ IS tracked — it's the actual PRD/architecture/SPEC/stories

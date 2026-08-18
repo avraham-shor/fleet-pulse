@@ -18,6 +18,8 @@ Requires Node 24 LTS (see `.nvmrc`).
 npm install
 npm start   # server.js (:3000) + Vite dev client, concurrently
 npm test    # vitest run
+npm run lint   # oxlint, --max-warnings 0
+npm run build  # tsc -b && vite build
 ```
 
 `npm start`'s server leg has nothing to run until `server.js` lands; until then use
@@ -34,7 +36,7 @@ npm test    # vitest run
 _Scaffolded from `create-vite` (react-ts). Oxlint config and React Compiler notes below
 are the template's own, kept as-is per the architecture's lint convention._
 
-# React + TypeScript + Vite
+## React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
@@ -43,11 +45,11 @@ Currently, two official plugins are available:
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
 - [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
 
-## React Compiler
+### React Compiler
 
 The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
-## Expanding the Oxlint configuration
+### Expanding the Oxlint configuration
 
 If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
 

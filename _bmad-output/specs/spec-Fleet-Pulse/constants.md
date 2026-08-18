@@ -18,6 +18,10 @@ Every value below is authored, not observed — we write the server that emits t
 | Reconnect backoff (SSE/WS) | 1 s doubling to a 15 s cap | Fast recovery without hammering a struggling server (FR-27) |
 | Batch-processing budget | 50 ms per 30-reading batch | Unit-testable proxy for "no visible stall" (NFR-2) |
 | Banner clear hysteresis | 5 s healthy | The degraded banner never flaps (CM2, FR-26) |
+| WS keepalive ping interval | 15 s | AD-8: the WS manager sends `ping` at this interval and consumes `pong` (ping/pong RTT feeds FR-30's latency metric); half of the 30 s presence liveness timeout so one missed pong doesn't itself retire an entry |
+| Staleness re-evaluation tick | 1 s | AD-3: the one constants-defined tick, started by `app/`, that re-evaluates the effective-trust selector — an order of magnitude under the 10 s staleness badge threshold so the badge flips promptly |
+| Reconnect backoff multiplier | 2× | The "doubling" half of the 1 s → 15 s backoff curve (FR-27) |
+| Circuit breaker failure threshold | 3 consecutive 503s | AD-8, FR-25: each completed attempt counts, retries included; opens the circuit into degraded mode on cached data |
 
 ## Server emission parameters
 
@@ -29,8 +33,8 @@ The other half of the pair: what `server.js` emits, so each client threshold has
 | GPS batch size | 10–30 buffered readings |
 | Fuel false-0% glitch window | 2–4 s |
 | Stuck speed sensor | `truck_7`, 999 km/h, held 5–10 s |
-| Ghost disconnect | 20% chance, fixed 10 s delay (the client still tolerates *up to* 10 s per FR-19) |
-| Fleet 503 under load | 15% chance, with `Retry-After` |
+| Ghost disconnect | 20% chance, fixed 10 s delay (the client's 30 s presence liveness timeout already tolerates this; FR-19) |
+| Fleet 503 under load | 15% chance, `Retry-After: 3` s |
 | Fleet size | 12 trucks |
 
 **Free parameters** — start positions, in-range batch and cadence distributions — are build-time choices made inside the same module, not scattered across the simulator.

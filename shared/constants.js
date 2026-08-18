@@ -9,6 +9,11 @@
 // only free parameters are ours to choose. See
 // _bmad-output/specs/spec-Fleet-Pulse/constants.md for the full rationale
 // behind each value.
+//
+// Units convention: `_MS` = milliseconds, `_KMH` = km/h, `_PCT` = percentage
+// points (0-100), `_CHANCE` = a probability fraction (0-1), `_S` = seconds
+// (used only for values that cross the wire as HTTP header seconds, e.g.
+// `Retry-After`).
 
 // --- Client thresholds -----------------------------------------------------
 
@@ -51,6 +56,23 @@ export const CLIENT_THRESHOLDS = Object.freeze({
 
   // The degraded banner never flaps (CM2, FR-26)
   BANNER_CLEAR_HYSTERESIS_MS: 5_000,
+
+  // AD-8: WS manager sends `ping` at this interval, consumes `pong`
+  // (ping/pong RTT is FR-30's latency metric). Half of the presence
+  // liveness timeout so one missed pong doesn't itself retire an entry.
+  WS_KEEPALIVE_PING_MS: 15_000,
+
+  // AD-3: the one constants-defined tick, started by app/, that
+  // re-evaluates the effective-trust selector. An order of magnitude
+  // under the staleness badge threshold so the badge flips promptly.
+  STALENESS_TICK_MS: 1_000,
+
+  // The "doubling" half of the reconnect backoff curve (FR-27)
+  RECONNECT_BACKOFF_MULTIPLIER: 2,
+
+  // Three consecutive failed 503s open the circuit (AD-8, FR-25);
+  // each completed attempt counts, retries included
+  BREAKER_FAILURE_THRESHOLD: 3,
 })
 
 // --- Server emission parameters --------------------------------------------
@@ -59,6 +81,10 @@ export const CLIENT_THRESHOLDS = Object.freeze({
 // threshold above has something real to classify.
 
 export const SERVER_PARAMS = Object.freeze({
+  // The one place the port lives; vite.config.ts's dev proxy imports this
+  // rather than hardcoding it a second time
+  SERVER_PORT: 3_000,
+
   TELEMETRY_TICK_MS: 2_000,
 
   GPS_BATCH_SIZE_MIN: 10,
@@ -80,6 +106,7 @@ export const SERVER_PARAMS = Object.freeze({
 
   // Fleet GET fails intermittently under load, with Retry-After
   FLEET_503_CHANCE: 0.15,
+  FLEET_503_RETRY_AFTER_S: 3,
 
   FLEET_SIZE: 12,
 })
