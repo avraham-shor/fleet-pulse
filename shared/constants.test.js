@@ -40,6 +40,14 @@ const EXPECTED_SERVER_PARAMS_KEYS = [
   'FLEET_503_CHANCE',
   'FLEET_503_RETRY_AFTER_S',
   'FLEET_SIZE',
+  'OUT_OF_ORDER_CHANCE',
+  'OUT_OF_ORDER_MAX_SKEW_MS',
+  'GPS_BATCH_CHANCE',
+  'FUEL_GLITCH_CHANCE',
+  'STUCK_SPEED_CHANCE',
+  'SYSTEM_REASSIGN_CHANCE',
+  'ROUTE_MUTATION_PROCESSING_DELAY_MS',
+  'TELEMETRY_HISTORY_CAP',
 ]
 
 // Fields whose value is a name/id, not a magnitude — excluded from the
@@ -48,7 +56,15 @@ const NON_NUMERIC_KEYS = new Set(['STUCK_SPEED_TRUCK_ID'])
 
 // Fields that are probability fractions, not magnitudes — checked for the
 // 0..1 range instead of plain positivity.
-const CHANCE_KEYS = new Set(['GHOST_DISCONNECT_CHANCE', 'FLEET_503_CHANCE'])
+const CHANCE_KEYS = new Set([
+  'GHOST_DISCONNECT_CHANCE',
+  'FLEET_503_CHANCE',
+  'OUT_OF_ORDER_CHANCE',
+  'GPS_BATCH_CHANCE',
+  'FUEL_GLITCH_CHANCE',
+  'STUCK_SPEED_CHANCE',
+  'SYSTEM_REASSIGN_CHANCE',
+])
 
 describe('shared/constants', () => {
   it('freezes both exports so accidental mutation throws, not silently succeeds (AD-2)', () => {
@@ -80,9 +96,10 @@ describe('shared/constants', () => {
   })
 
   it('keeps every probability constant inside the 0..1 range', () => {
-    for (const value of [SERVER_PARAMS.GHOST_DISCONNECT_CHANCE, SERVER_PARAMS.FLEET_503_CHANCE]) {
-      expect(value).toBeGreaterThanOrEqual(0)
-      expect(value).toBeLessThanOrEqual(1)
+    for (const [key, value] of Object.entries(SERVER_PARAMS)) {
+      if (!CHANCE_KEYS.has(key)) continue
+      expect(value, `SERVER_PARAMS.${key} should be >= 0`).toBeGreaterThanOrEqual(0)
+      expect(value, `SERVER_PARAMS.${key} should be <= 1`).toBeLessThanOrEqual(1)
     }
   })
 
@@ -146,5 +163,15 @@ describe('shared/constants', () => {
   it('keeps the batch-processing budget under one coalesced commit window (NFR-1, NFR-2)', () => {
     const commitWindowMs = 1000 / CLIENT_THRESHOLDS.RENDER_COALESCE_MAX_COMMITS_PER_SEC
     expect(CLIENT_THRESHOLDS.BATCH_PROCESSING_BUDGET_MS).toBeLessThan(commitWindowMs)
+  })
+
+  it('keeps the route-mutation processing delay imperceptible against the telemetry tick (story 1.2)', () => {
+    // The artificial PATCH-race window must stay well under one telemetry
+    // tick, or route mutations would visibly lag the live stream.
+    expect(SERVER_PARAMS.ROUTE_MUTATION_PROCESSING_DELAY_MS).toBeLessThan(SERVER_PARAMS.TELEMETRY_TICK_MS)
+  })
+
+  it('keeps the server telemetry history cap the same order of magnitude as the client per-signal cap', () => {
+    expect(SERVER_PARAMS.TELEMETRY_HISTORY_CAP).toBe(CLIENT_THRESHOLDS.TELEMETRY_HISTORY_CAP_PER_SIGNAL)
   })
 })

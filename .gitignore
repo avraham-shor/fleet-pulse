@@ -15,9 +15,10 @@ coverage
 
 # Local env overrides — every mode-specific file (.env.local,
 # .env.production, .env.development, ...), not just the two Vite loads by
-# default
+# default. .env.example is checked-in documentation, not an override — kept.
 .env
 .env.*
+!.env.example
 
 # BMad tooling (skill/agent machinery, not this project's own content).
 # _bmad-output/ IS tracked — it's the actual PRD/architecture/SPEC/stories

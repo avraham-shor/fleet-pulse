@@ -21,25 +21,25 @@ This epic delivers FleetPulse end to end: a self-built mock fleet-dispatch serve
 
 ## Requirements & Constraints
 
-- A displayed value is always in exactly one of five trust states — trusted, suspect, sensor fault, stale, degraded. Plausibility trust (trusted/suspect/sensor-fault) is assigned in the pipeline only; staleness (arrival clock) and degraded (system health) are layered on top by one selector.
-- Two clocks must never be conflated: reading timestamp drives ordering, backfill, and suspect windows; arrival clock drives staleness only.
-- Uncertainty always fails toward alerting, never suppression (CM1), binding on every classifier including ones added later. Trust annotations stay inline, never modal, and the degraded banner uses hysteresis so it cannot flap (CM2).
+- A displayed value is always in exactly one of five trust states — trusted, suspect, sensor fault, stale, degraded — each visually distinct. Plausibility trust (trusted/suspect/sensor-fault) is assigned per signal in the pipeline only, never by a widget; staleness (arrival clock) and degraded (system health) are layered on top by one selector, the sole trust source every widget reads.
+- Two clocks must never be conflated: reading timestamp drives ordering, backfill, dedupe, and the fuel suspect window; arrival clock drives staleness only. A batch replaying old timestamps still counts as fresh contact; staleness means silence, not rejection.
+- Uncertainty always fails toward alerting, never suppression (CM1), binding on every classifier including ones added later — a masked real emergency is worse than a false alert, and this is tested explicitly. Trust annotations stay inline, never modal (CM2), and the degraded banner uses hysteresis so it cannot flap.
 - Depth over breadth (CM3): tiers are strictly sequential, each done and green before the next starts — Tier 1 core (full mandated feature set, including the FR-13 conflict chooser, not cuttable), then Tier 2 (circuit breaker, dev observability panel), then Tier 3 stretch (filterable view, shortcuts, geofencing) only if time remains.
-- Every mutation carries the acting dispatcher's identity and, for routes, a version check; a stale write is rejected, never silently applied. The UI is pessimistic — on-screen state changes only after server confirmation, and a failed mutation leaves local state untouched and visibly errors.
-- Destructive or ambiguous actions (cancel, reassign, creating a route for an already-busy truck) require explicit confirmation; all input is validated before submission.
-- Every in-memory collection (telemetry history, anomaly log, audit trail, obs counters) must be bounded — an uncapped collection is a review defect. Server-originated text is untrusted display content, rendered as text nodes only.
-- Extensibility is registration, not modification: a new signal, anomaly rule, or widget is a new module plus one registration call.
+- Every mutation carries the acting dispatcher's identity; every route mutation also carries a version check, and a stale write is rejected, never silently applied. The UI is pessimistic — on-screen state changes only after server confirmation, and a failed mutation leaves local state untouched and visibly errors. Mutations are refused with a visible reason while the dispatcher is unregistered.
+- Destructive or ambiguous actions (cancel, reassign, creating a route for an already-busy or in-maintenance truck) require explicit confirmation; all input is validated before submission.
+- Every in-memory collection (telemetry history, anomaly log, audit trail, obs counters) must be bounded — an uncapped collection is a review defect. Server-originated text is untrusted display content, rendered as text nodes only; `dangerouslySetInnerHTML` is banned.
+- Extensibility is registration, not modification: a new signal, anomaly rule, or widget is a new module plus one registration call; editing an existing module to accommodate it is a violation.
 - Test target is 16+ meaningful cases (minimum 8 mandated) spanning GPS batching, out-of-order timestamps, fuel and speed classification, optimistic-locking conflicts, ghost presence, circuit breaker, and the busy-truck guard; constants are imported into tests, never re-hardcoded, and test names cite the FR they prove.
 - Deadline 2026-08-19, local-only (`npm install && npm start`, `npm test`, latest Chrome); no deploy, persistence beyond the session, CI, or authentication beyond dispatcher registration.
 
 ## Technical Decisions
 
 - Paradigm: layered unidirectional dataflow — `transport/` → `pipeline/` → `store/` ← `ui/` — with the telemetry integrity engine as a pipes-and-filters core; `pipeline/` and `store/` import no React and no DOM.
-- One `shared/constants.js` module holds every tunable on both sides (server emission parameters and client thresholds, chosen together); a tunable literal anywhere else is a defect.
-- Wire shapes are declared once, verbatim from the assignment brief, in `src/contract/`. `server.js` is a single in-memory Node file importing only express, ws, node builtins, and constants; one contract test asserts every server emission parses against those declarations.
+- One `shared/constants.js` module holds every tunable on both sides (server emission parameters and client thresholds, chosen together as one source of truth); a tunable literal anywhere else is a defect.
+- Wire shapes are declared once, verbatim from the assignment brief, in `src/contract/`. `server.js` is a single in-memory Node file importing only express, ws, node builtins, and constants; one contract test asserts every server emission parses against those declarations. Deterministic quirk triggers live only under `/api/dev/*`; client `src/` never references them.
 - Exactly two connection owners: one SSE manager, one WS manager, both handling reconnect/backoff (1s doubling to a 15s cap); WS re-registers and rebuilds presence on reconnect.
-- One mutation gate: `transport/api-client` is the only caller of `fetch`, injects the dispatcher-id and version headers, normalizes every failure to one discriminated union (conflict/retryable/error), and routes every 409 into a single conflict flow. Route state has exactly one writer — the WS broadcast echo, not the mutation's own success response — applied monotonically by version.
-- Single Zustand store with a single coalescing batched commit; no component-local mirrors of fleet/route/presence state.
+- One mutation gate: `transport/api-client` is the only caller of `fetch`, injects the dispatcher-id and version headers, normalizes every failure to one discriminated union (conflict/retryable/error), and routes every 409 — stale version or mid-processing race — into a single conflict flow. Route state has exactly one writer — the WS broadcast echo, not the mutation's own success response — applied monotonically by version.
+- Single Zustand store with a single coalescing batched commit (ceiling ≤10 commits/s); no component-local mirrors of fleet/route/presence state.
 - Fixed pipeline stage order: ingest → order/dedupe by reading timestamp → classify → one batched commit; backfilled (out-of-order) readings still pass classification so history entries carry real trust.
 - Every collection is created through one shared bounded-buffer utility, capped from constants. No map or chart library — hand-rolled SVG for the coordinate grid, trails, and detail sparklines.
 - The dispatcher's own identity is session state, not a presence entry, and survives a fleet reset; presence itself is keyed only by server-issued id, never by name.
@@ -49,8 +49,8 @@ This epic delivers FleetPulse end to end: a self-built mock fleet-dispatch serve
 
 - All five trust states render through one shared badge component and token set — no widget invents its own trust visuals.
 - Conflict handling is two-stage: an inline, non-blocking notice appears under an open editor the moment another dispatcher's change lands, before any save is attempted (avoidance); an actual version conflict opens a side-by-side chooser naming the conflicting dispatcher with both versions, letting the dispatcher adopt, re-apply, or back out (resolution).
-- Presence shows who else is active and which truck each dispatcher is currently viewing — truck-level only, not route-level, an honest limit of the underlying protocol.
-- Degraded mode is one global banner naming which condition is down (stream vs. fleet fetch), clearing only after a healthy hysteresis period so it never flaps; per-truck staleness badges are separate, driven by the trust selector.
+- Presence shows who else is active and which truck each dispatcher is currently viewing — truck-level only, not route-level, an honest limit of the underlying protocol (it cannot express "editing this route").
+- Degraded mode is one global banner naming which condition is down (stream vs. fleet fetch), clearing only after a healthy hysteresis period so it never flaps; per-truck staleness badges are separate, driven by the trust selector, not by health conditions.
 - A failure inside one widget is contained by its own error boundary; the rest of the dashboard keeps working.
 
 ## Cross-Story Dependencies

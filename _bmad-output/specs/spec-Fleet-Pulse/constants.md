@@ -36,8 +36,19 @@ The other half of the pair: what `server.js` emits, so each client threshold has
 | Ghost disconnect | 20% chance, fixed 10 s delay (the client's 30 s presence liveness timeout already tolerates this; FR-19) |
 | Fleet 503 under load | 15% chance, `Retry-After: 3` s |
 | Fleet size | 12 trucks |
+| Out-of-order SSE (quirk #5) | 10% chance, timestamp skewed back up to 3 s |
+| GPS batch trigger (quirk #1) | 5% chance per truck per tick |
+| Fuel glitch trigger (quirk #2) | 5% chance per truck per tick |
+| Stuck speed trigger (quirk #3) | 5% chance per tick (`truck_7` only) |
+| System-dispatcher reassign (quirks #4, #8) | 5% chance per tick |
+| Route-mutation processing delay | 150 ms, on `PATCH`/`PUT reassign` |
+| Server telemetry history cap | 300 readings per truck |
 
 **Free parameters** — start positions, in-range batch and cadence distributions — are build-time choices made inside the same module, not scattered across the simulator.
+
+**Story 1.2 additions and rationale.** The brief fixes no probability for quirk #5 (out-of-order); chosen low (10%) with a shallow skew (~3 s, a couple of ticks) — old enough to exercise FR-6 backfill, not so old it desyncs the trail. The same `OUT_OF_ORDER_CHANCE` roll also decides whether a generated GPS batch (quirk #1) contains one adjacent non-monotonic swap, since both are timestamp-ordering concerns and one constant covers both rather than adding a second. Quirks #1–#3 are documented with a size/duration range each but no trigger frequency — without one they could never self-fire unattended, so each gets its own 5%-per-tick trigger chance, the same order of magnitude as the brief-fixed per-request chances above. Quirks #4 (stale-version 409) and #8 (PATCH race) aren't self-timed by the brief either; both are consequences of *something* changing a route out from under a stale reader, and the one autonomous actor that can do that unattended is quirk 8's synthetic "system" dispatcher (AD-12). `SYSTEM_REASSIGN_CHANCE` (5% per tick) is that one mechanism: a small per-tick chance the system dispatcher reassigns an active/in-progress route to a different truck. That single knob is what makes both quirks self-fire — #4 whenever anyone later holds the now-stale version, #8 specifically when the reassignment lands mid-PATCH.
+
+`ROUTE_MUTATION_PROCESSING_DELAY_MS` (150 ms) is a second, distinct piece of quirk #8's mechanism: without *some* gap between reading a route's version and committing a write, no request could ever be raced against — Node's single-threaded event loop would run a synchronous handler to completion before anything else touches the route. The delay is deliberately far under one telemetry tick (2 s) so it's imperceptible in the UI, but long enough that the system dispatcher's chaos reassignment (or a genuinely concurrent second request) reliably lands inside it, both unattended and on demand via `/api/dev/quirk/8`. `TELEMETRY_HISTORY_CAP` (300) bounds the server's own per-truck telemetry history buffer feeding `GET /api/telemetry/history/:truckId` (NFR-3) — deliberately the same value as the client's `TELEMETRY_HISTORY_CAP_PER_SIGNAL`, though it caps a different, simpler collection (one arrival-ordered buffer of full readings per truck, not the client's per-signal, timestamp-sorted store).
 
 ## Pairing rule
 

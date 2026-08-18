@@ -109,4 +109,48 @@ export const SERVER_PARAMS = Object.freeze({
   FLEET_503_RETRY_AFTER_S: 3,
 
   FLEET_SIZE: 12,
+
+  // Out-of-order SSE (quirk #5): the brief fixes no probability, only that
+  // it happens sometimes. Free parameter (AD-2, story 1.2 design notes):
+  // low chance, skew a few ticks deep — old enough to exercise FR-6
+  // backfill, not so old it desyncs the trail. Reused for the GPS-batch
+  // quirk's own occasional non-monotonic entry (both are "timestamp
+  // ordering" concerns; one constant, not two).
+  OUT_OF_ORDER_CHANCE: 0.1,
+  OUT_OF_ORDER_MAX_SKEW_MS: 3_000,
+
+  // Quirks 1/2/3 (GPS batch, fuel glitch, stuck speed) are documented with
+  // a size/duration range each but not a trigger frequency — without one
+  // they could never self-fire "unattended" (story 1.2 AC). Free
+  // parameters, same order of magnitude as the brief-fixed per-request
+  // chances above; rolled once per truck per telemetry tick.
+  GPS_BATCH_CHANCE: 0.05,
+  FUEL_GLITCH_CHANCE: 0.05,
+  STUCK_SPEED_CHANCE: 0.05,
+
+  // Quirks 4 (stale-version 409) and 8 (PATCH race) aren't self-timed in
+  // the brief either — they're consequences of *something* changing a
+  // route out from under a stale reader. The one autonomous actor that can
+  // cause that unattended is quirk 8's own synthetic "system" dispatcher
+  // (AD-12): per tick, a small chance it reassigns one active/in-progress
+  // route to a different truck. That single mechanism is what makes both
+  // quirks self-fire — #4 whenever anyone is later holding the
+  // now-stale version, #8 when the reassignment lands mid-PATCH.
+  SYSTEM_REASSIGN_CHANCE: 0.05,
+
+  // Artificial processing delay on version-checked route mutations (PATCH,
+  // PUT reassign) between reading the client's `If-Match` and committing
+  // the write. Gives quirk #8 (and any two genuinely concurrent requests) a
+  // real window to land mid-request instead of only ever racing at entry.
+  // Small enough to be imperceptible in the UI; large enough that the dev
+  // quirk trigger (or the self-firing scheduler) reliably lands inside it.
+  ROUTE_MUTATION_PROCESSING_DELAY_MS: 150,
+
+  // Cap on the server's own in-memory telemetry history buffer per truck,
+  // feeding GET /api/telemetry/history/:truckId. This is arrival-ordered
+  // raw wire history (NFR-3-bounded, server-side), a different, simpler
+  // collection than the client's per-signal, timestamp-sorted store
+  // (AD-10 governs that one) — same order of magnitude as the client's
+  // TELEMETRY_HISTORY_CAP_PER_SIGNAL by design, not by coincidence.
+  TELEMETRY_HISTORY_CAP: 300,
 })
