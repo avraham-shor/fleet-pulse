@@ -325,9 +325,23 @@ describe('server.js contract fidelity (AD-13)', () => {
       const cleared = await waitFor(bob.queue, (m) => m.type === 'dispatcher_viewing' && m.dispatcherId === bob.dispatcherId)
       expect(cleared.truckId).toBeNull()
 
+      // ping also re-broadcasts Bob's current viewing state (null, cleared
+      // above) as a liveness refresh (FR-19 fix) — count matches before/
+      // after since the content is identical to the clear's own broadcast.
+      const viewingBroadcastsBeforePing = alice.queue.filter(
+        (m) => m.type === 'dispatcher_viewing' && m.dispatcherId === bob.dispatcherId,
+      ).length
+
       bob.ws.send(JSON.stringify({ type: 'ping' }))
       const pong = await waitFor(bob.queue, (m) => m.type === 'pong')
       assertExactKeys(pong, ['type'], 'PongMessage')
+
+      await waitUntil(
+        async () =>
+          alice.queue.filter((m) => m.type === 'dispatcher_viewing' && m.dispatcherId === bob.dispatcherId).length >
+          viewingBroadcastsBeforePing,
+        1000,
+      )
 
       bob.ws.close()
       alice.ws.close()

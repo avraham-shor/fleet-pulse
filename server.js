@@ -774,6 +774,17 @@ function createFleetPulseInstance() {
     }
     if (msg.type === 'ping') {
       sendTo(ws, { type: 'pong' })
+      // Re-broadcast this dispatcher's current viewing state, unchanged, as
+      // a liveness refresh (FR-19 fix): ws-manager already sends `ping`
+      // every WS_KEEPALIVE_PING_MS regardless of activity, so an
+      // idle-but-connected dispatcher no longer silently falls off peers'
+      // presence lists after PRESENCE_LIVENESS_TIMEOUT_MS. Reuses the
+      // existing dispatcher_viewing message and the client's existing
+      // lastSeenAt refresh on it — no new wire message type, no client
+      // change (deferred-work.md, story-1.6 human-decision item).
+      const dispatcherId = wsIdentity.get(ws)
+      const entry = dispatcherId ? presence.get(dispatcherId) : undefined
+      if (entry) broadcastWs({ type: 'dispatcher_viewing', dispatcherId, truckId: entry.viewingTruckId })
       return
     }
     if (msg.type === 'viewing_truck') {

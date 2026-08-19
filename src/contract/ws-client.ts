@@ -28,7 +28,12 @@ export interface RegisterDispatcherMessage {
 }
 
 /** Keepalive heartbeat, sent by ws-manager every `WS_KEEPALIVE_PING_MS`
- * (AD-8); the server replies with `pong` to that socket only. */
+ * (AD-8); the server replies with `pong` to that socket only, and also
+ * re-broadcasts this dispatcher's current `dispatcher_viewing` state to
+ * peers as a presence liveness refresh (FR-19 fix, server.js's `ping`
+ * handler) — closes the gap where an idle-but-connected dispatcher who
+ * never changes their viewing target would otherwise vanish from peers'
+ * presence after `PRESENCE_LIVENESS_TIMEOUT_MS`. */
 export interface PingMessage {
   type: 'ping'
 }

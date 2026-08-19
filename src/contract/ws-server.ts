@@ -38,7 +38,10 @@ export interface DispatcherLeftMessage {
 
 /** Broadcast whenever a dispatcher's viewed truck changes, including to
  * `null` (explicitly clearing the indicator — the brief's protocol must be
- * able to say "viewing nothing"). */
+ * able to say "viewing nothing"). Also re-broadcast unchanged every time
+ * that dispatcher's keepalive `ping` arrives (FR-19 liveness fix) — the
+ * client's existing lastSeenAt refresh on this message type doubles as an
+ * idle-but-connected heartbeat with no new message type needed. */
 export interface DispatcherViewingMessage {
   type: 'dispatcher_viewing'
   dispatcherId: string

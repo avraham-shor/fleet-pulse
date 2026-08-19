@@ -126,6 +126,11 @@
   gap: 8px;
 }
 
+.auditList {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
 .empty {
   font-size: 13px;
   font-style: italic;

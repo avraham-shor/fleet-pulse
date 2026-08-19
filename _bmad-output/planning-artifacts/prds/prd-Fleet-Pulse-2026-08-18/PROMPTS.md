@@ -12,6 +12,7 @@ Chronological journal of AI usage across this project. Each entry records: the g
 
 **How the AI was used:**
 - I provided the assignment PDF as the source input; the AI reconciled every assignment requirement, server quirk, WS message type, and evaluation parameter against the draft and reported coverage.
+- I chose to hand over the full PDF rather than retype its contract by hand — full-document context avoids the transcription drift a manual, partial copy would risk across 34 requirements, 8 quirks, and 9 endpoints, and it's what let the reconciliation above catch every one of them instead of only the ones I happened to remember to mention. The "used AI tools iteratively" bar the assignment's SDD criterion actually names is everything that follows from here: the section-by-section coaching below, the two-pass review gate, the fuel-glitch policy I pushed back on and corrected, and the ten build-phase entries in the repo's own `PROMPTS.md` that carry this same discipline through every story.
 - The AI facilitated section-by-section: it asked, I decided. It drafted prose from my decisions and flagged its own inferences as `[ASSUMPTION]`.
 - The AI ran an adversarial review gate: three parallel reviewers (quality rubric, a simulated assignment evaluator, an adversarial edge-case hunter) against the draft. Findings were triaged with me one by one.
 
