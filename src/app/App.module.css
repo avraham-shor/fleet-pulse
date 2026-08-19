@@ -1,0 +1,23 @@
+.shell {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border, #e5e4e7);
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.main {
+  flex: 1;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}

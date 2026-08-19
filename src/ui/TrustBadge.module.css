@@ -1,0 +1,88 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.badge[data-trust='trusted'] {
+  color: #1a7f37;
+  background: rgba(26, 127, 55, 0.1);
+  border-color: rgba(26, 127, 55, 0.35);
+}
+
+.badge[data-trust='suspect'] {
+  color: #9a6700;
+  background: rgba(154, 103, 0, 0.12);
+  border-color: rgba(154, 103, 0, 0.35);
+}
+
+.badge[data-trust='sensor-fault'] {
+  color: #a01f1f;
+  background: rgba(160, 31, 31, 0.1);
+  border-color: rgba(160, 31, 31, 0.35);
+}
+
+.badge[data-trust='stale'] {
+  color: #57606a;
+  background: rgba(87, 96, 106, 0.12);
+  border-color: rgba(87, 96, 106, 0.35);
+}
+
+.badge[data-trust='degraded'] {
+  color: #6c2bd9;
+  background: rgba(108, 43, 217, 0.1);
+  border-color: rgba(108, 43, 217, 0.35);
+}
+
+.badge[data-trust='none'] {
+  color: #6b6375;
+  background: rgba(107, 99, 117, 0.1);
+  border-color: rgba(107, 99, 117, 0.25);
+  font-weight: 400;
+  font-style: italic;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* Background/border re-tuned here too, not just color: the light-mode
+   * low-alpha rgba pills above are tuned against a light --bg and read as
+   * near-invisible washes on a dark background otherwise — every other
+   * dark-aware surface in this story (ErrorBoundary, FleetOverview's own
+   * grid) re-tunes both, not color alone. */
+  .badge[data-trust='trusted'] {
+    color: #56d364;
+    background: rgba(86, 211, 100, 0.16);
+    border-color: rgba(86, 211, 100, 0.4);
+  }
+  .badge[data-trust='suspect'] {
+    color: #e3b341;
+    background: rgba(227, 179, 65, 0.18);
+    border-color: rgba(227, 179, 65, 0.42);
+  }
+  .badge[data-trust='sensor-fault'] {
+    color: #ff9b9b;
+    background: rgba(255, 155, 155, 0.16);
+    border-color: rgba(255, 155, 155, 0.4);
+  }
+  .badge[data-trust='stale'] {
+    color: #9198a1;
+    background: rgba(145, 152, 161, 0.18);
+    border-color: rgba(145, 152, 161, 0.4);
+  }
+  .badge[data-trust='degraded'] {
+    color: #c297ff;
+    background: rgba(194, 151, 255, 0.16);
+    border-color: rgba(194, 151, 255, 0.4);
+  }
+  .badge[data-trust='none'] {
+    color: #9ca3af;
+    background: rgba(156, 163, 175, 0.14);
+    border-color: rgba(156, 163, 175, 0.3);
+  }
+}

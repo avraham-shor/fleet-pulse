@@ -1,0 +1,14 @@
+.fallback {
+  padding: 12px 16px;
+  border: 1px solid #d94f4f;
+  border-radius: 6px;
+  background: rgba(217, 79, 79, 0.08);
+  color: #a01f1f;
+}
+
+@media (prefers-color-scheme: dark) {
+  .fallback {
+    background: rgba(217, 79, 79, 0.15);
+    color: #ff9b9b;
+  }
+}

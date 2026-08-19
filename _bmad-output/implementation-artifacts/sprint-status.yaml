@@ -40,7 +40,7 @@ development_status:
   1-2-server-js-complete-contract-and-all-eight-failure-modes: review
   1-3-wire-contract-types-and-the-transport-layer: review
   1-4-store-foundation-and-the-telemetry-integrity-engine: review
-  1-5-live-fleet-overview: backlog
+  1-5-live-fleet-overview: review
   1-6-dispatcher-presence: backlog
   1-7-route-lifecycle-management: backlog
   1-8-conflict-avoidance-and-resolution: backlog

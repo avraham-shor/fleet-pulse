@@ -7,7 +7,8 @@
 // own tests — mirrors the pipeline's own not-yet-built-consumer seam).
 //
 // Slices this story owns: telemetry and obs. `health` is the minimal
-// scaffold story 1.9 populates for real. `fleet`/`routes`/`presence` are
+// scaffold story 1.9 populates for real. `fleet` is story 1.5's roster
+// slice (Design Notes deferral from story 1.4). `routes`/`presence` are
 // later stories' slices — not created here.
 
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
@@ -15,21 +16,43 @@ import { CLIENT_THRESHOLDS } from '../../shared/constants.js'
 import { createTelemetrySlice, applyTelemetryCommitsPure, type TelemetrySlice } from './slices/telemetrySlice.ts'
 import { createObsSlice, pushAnomaliesPure, type ObsSlice } from './slices/obsSlice.ts'
 import { createHealthSlice, type HealthSlice } from './slices/healthSlice.ts'
+import { createFleetSlice, type FleetSlice } from './slices/fleetSlice.ts'
 import type { PipelineCommit } from '../pipeline/index.ts'
 import type { AnomalyEntry } from '../pipeline/types.ts'
 
-export type FleetPulseStore = TelemetrySlice & ObsSlice & HealthSlice
+export type FleetPulseStore = TelemetrySlice & ObsSlice & HealthSlice & FleetSlice
 
-/** The one store this story creates. A later story's `app/` is the only
- * place allowed to import this directly outside tests (AD-1: `ui/` reaches
- * it only via selectors/actions, never by importing `store.ts` and reaching
- * into internals). */
+/** The store factory. Tests call this directly for per-test isolation
+ * (a fresh, unshared instance every time). Production code should not call
+ * this itself — use `getFleetPulseStore()` below, the one memoized
+ * production instance (AD-1: `ui/` reaches it only via selectors/actions,
+ * never by reaching into store internals). */
 export function createFleetPulseStore(): UseBoundStore<StoreApi<FleetPulseStore>> {
   return create<FleetPulseStore>()((...args) => ({
     ...createTelemetrySlice(...args),
     ...createObsSlice(...args),
     ...createHealthSlice(...args),
+    ...createFleetSlice(...args),
   }))
+}
+
+let singletonStore: UseBoundStore<StoreApi<FleetPulseStore>> | null = null
+
+/**
+ * The one production store instance (AD-5: "the Zustand store is the only
+ * client source of truth" — singular). Lazily created on first call and
+ * memoized for the lifetime of the page. `app/`'s composition root is what
+ * triggers the actual construction (by being the first caller during
+ * bootstrap, where it also builds the coalescing scheduler around this same
+ * instance); `ui/` widgets call this same accessor to subscribe via
+ * selectors without ever importing `app/` (AD-1: `ui/` imports only
+ * `store/`). Whichever module happens to call it first is harmless — it's
+ * pure memoization, not initialization order-sensitive. Tests use
+ * `createFleetPulseStore()` instead, for per-test isolation.
+ */
+export function getFleetPulseStore(): UseBoundStore<StoreApi<FleetPulseStore>> {
+  if (!singletonStore) singletonStore = createFleetPulseStore()
+  return singletonStore
 }
 
 export interface CoalescingCommitScheduler {

@@ -1,0 +1,114 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.status {
+  padding: 24px;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.grid {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 5 / 3;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 8px;
+  background: color-mix(in srgb, canvas 96%, canvastext 4%);
+}
+
+.trail {
+  fill: none;
+  stroke: var(--accent, #aa3bff);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  opacity: 0.55;
+}
+
+.marker {
+  /* Theme-aware, not a literal hex: a hardcoded dark outline (matching
+   * index.css's light-mode --bg) would blend into the grid's own
+   * background (also theme-aware, above) once dark mode flips --bg to a
+   * near-identical dark value — the fill still carries status color, but
+   * the outline would vanish. `canvastext` tracks the OS/browser's actual
+   * resolved text color for the current color scheme. */
+  stroke: canvastext;
+  stroke-width: 1.5;
+}
+
+.marker[data-status='active'] {
+  fill: #1a7f37;
+}
+
+.marker[data-status='idle'] {
+  fill: #9a6700;
+}
+
+.marker[data-status='maintenance'] {
+  fill: #a01f1f;
+}
+
+.marker[data-trust='stale'],
+.marker[data-trust='degraded'] {
+  stroke-dasharray: 3 2;
+  opacity: 0.6;
+}
+
+.markerLabel {
+  font-size: 11px;
+  fill: currentColor;
+  pointer-events: none;
+  user-select: none;
+}
+
+.roster {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.rosterRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.statusDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.statusDot[data-status='active'] {
+  background: #1a7f37;
+}
+
+.statusDot[data-status='idle'] {
+  background: #9a6700;
+}
+
+.statusDot[data-status='maintenance'] {
+  background: #a01f1f;
+}
+
+.truckId {
+  font-family: ui-monospace, Consolas, monospace;
+  font-weight: 600;
+}
+
+.statusLabel {
+  color: var(--text, #6b6375);
+  flex: 1;
+}
