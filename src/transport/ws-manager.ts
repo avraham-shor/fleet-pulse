@@ -299,7 +299,11 @@ export function createWsManager(options: CreateWsManagerOptions): WsManager {
       // current caller (`PresencePanel`) already trims and blocks empty
       // submits, so this is defense-in-depth for the exported API's
       // contract, not a behavior change for any path exercised today.
-      if (name === '') return
+      // Trimmed, not just `=== ''`: a whitespace-only name (e.g. '   ')
+      // would otherwise slip past this guard and reach the wire literally
+      // (code-review finding — the guard's own contract is "no blank
+      // name", not "no exactly-empty-string name").
+      if (name.trim() === '') return
       currentDispatcherName = name
       if (socket && socket.readyState === WS_READY_STATE_OPEN) {
         const msg: ClientWsMessage = { type: 'register_dispatcher', name }

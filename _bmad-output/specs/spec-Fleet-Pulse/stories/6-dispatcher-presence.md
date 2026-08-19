@@ -73,7 +73,7 @@ context:
 **Acceptance Criteria:**
 - Given the app mounts, when the WS socket opens, then the dispatcher auto-registers and can (re-)identify via the presence widget without a reconnect. ✅ `bootstrap.ts` connects `wsManager` eagerly and auto-registers on open; `PresencePanel` re-registers the same socket under a chosen name via `getWsSendFacade().register()`.
 - Given a later widget or signal registers itself, when it does, then no existing widget file changes (AD-6). ✅ `FleetOverview.tsx` untouched; only a new widget module + one `App.tsx` import line.
-- Given `npm test`, when it runs, then the full suite (existing 138+ new) passes. ✅ 207/207 passing (69 new, including 3 added by this story's code-review pass).
+- Given `npm test`, when it runs, then the full suite (existing 138+ new) passes. ✅ 208/208 passing (70 new, including 4 added across this story's two code-review passes).
 
 ## Design Notes
 
