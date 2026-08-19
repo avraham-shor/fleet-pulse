@@ -11,6 +11,7 @@ const EXPECTED_CLIENT_THRESHOLDS_KEYS = [
   'STALENESS_BADGE_THRESHOLD_MS',
   'PRESENCE_LIVENESS_TIMEOUT_MS',
   'TELEMETRY_HISTORY_CAP_PER_SIGNAL',
+  'ANOMALY_LOG_CAP',
   'RENDER_COALESCE_MAX_COMMITS_PER_SEC',
   'BREAKER_PROBE_INTERVAL_MS',
   'RECONNECT_BACKOFF_INITIAL_MS',
@@ -173,5 +174,9 @@ describe('shared/constants', () => {
 
   it('keeps the server telemetry history cap the same order of magnitude as the client per-signal cap', () => {
     expect(SERVER_PARAMS.TELEMETRY_HISTORY_CAP).toBe(CLIENT_THRESHOLDS.TELEMETRY_HISTORY_CAP_PER_SIGNAL)
+  })
+
+  it('sizes the anomaly log cap to match its sibling telemetry-history cap (story 4 design notes, AD-18)', () => {
+    expect(CLIENT_THRESHOLDS.ANOMALY_LOG_CAP).toBe(CLIENT_THRESHOLDS.TELEMETRY_HISTORY_CAP_PER_SIGNAL)
   })
 })

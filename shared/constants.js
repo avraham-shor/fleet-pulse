@@ -40,6 +40,13 @@ export const CLIENT_THRESHOLDS = Object.freeze({
   // a GPS burst never evicts fuel/temp history
   TELEMETRY_HISTORY_CAP_PER_SIGNAL: 300,
 
+  // AD-18: cap on the obs slice's anomaly log boundedBuffer. No existing
+  // constant covered this (story 4 design notes) — set equal to
+  // TELEMETRY_HISTORY_CAP_PER_SIGNAL as a free parameter (AD-2) sized to
+  // match its sibling cap rather than inventing an unrelated number; the
+  // two are editable independently later.
+  ANOMALY_LOG_CAP: 300,
+
   // One batched commit covers all trucks; absorbs SSE floods (NFR-1)
   RENDER_COALESCE_MAX_COMMITS_PER_SEC: 10,
 
