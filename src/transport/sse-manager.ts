@@ -34,6 +34,13 @@ export interface CreateSseManagerOptions {
   /** Fired once per frame that fails to parse as JSON or doesn't have the
    * `TelemetryBatch` shape — dropped safely, never thrown. */
   onDroppedMessage?: (raw: unknown) => void
+  /** Fired with `true` every time the underlying `EventSource` opens
+   * (including the very first connect and every reconnect), and `false`
+   * every time it errors — the seam `app/bootstrap.ts` wires into the
+   * health slice's `telemetryStreamDown` condition (AD-9, FR-26). Never
+   * fired for a stale/superseded source's late callback, same as
+   * `onBatch`/`onDroppedMessage`. */
+  onConnectionChange?: (connected: boolean) => void
   /** Injection seam for tests; defaults to the global `EventSource`
    * constructor. */
   createEventSource?: (url: string) => EventSourceLike
@@ -143,6 +150,7 @@ export function createSseManager(options: CreateSseManagerOptions): SseManager {
     mySource.onopen = () => {
       if (source !== mySource) return // stale callback from a superseded source
       currentBackoffMs = CLIENT_THRESHOLDS.RECONNECT_BACKOFF_INITIAL_MS
+      options.onConnectionChange?.(true)
     }
 
     mySource.onmessage = (event) => {
@@ -158,6 +166,7 @@ export function createSseManager(options: CreateSseManagerOptions): SseManager {
       if (source !== mySource) return
       source = null
       mySource.close()
+      options.onConnectionChange?.(false)
       if (!closedByUser) scheduleReconnect()
     }
   }

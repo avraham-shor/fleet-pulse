@@ -6,10 +6,11 @@
 // callbacks into (this story proves it correct via direct injection in its
 // own tests — mirrors the pipeline's own not-yet-built-consumer seam).
 //
-// Slices this story owns: telemetry and obs. `health` is the minimal
-// scaffold story 1.9 populates for real. `fleet` is story 1.5's roster
-// slice (Design Notes deferral from story 1.4). `routes`/`presence` are
-// later stories' slices — not created here.
+// Slices this story owns: telemetry and obs. `health` was a minimal scaffold
+// until story 9 populated it for real (AD-9). `fleet` is story 1.5's roster
+// slice (Design Notes deferral from story 1.4). `routes`/`presence` were
+// added by later stories. `selection` (story 9) is the small cross-widget
+// seam `FleetOverview`'s roster click and `VehicleDetail` share.
 
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import { CLIENT_THRESHOLDS } from '../../shared/constants.js'
@@ -19,10 +20,11 @@ import { createHealthSlice, type HealthSlice } from './slices/healthSlice.ts'
 import { createFleetSlice, type FleetSlice } from './slices/fleetSlice.ts'
 import { createPresenceSlice, applyPresenceViewingPure, type PresenceSlice, type PresenceViewingUpdate } from './slices/presenceSlice.ts'
 import { createRoutesSlice, type RoutesSlice } from './slices/routesSlice.ts'
+import { createSelectionSlice, type SelectionSlice } from './slices/selectionSlice.ts'
 import type { PipelineCommit } from '../pipeline/index.ts'
 import type { AnomalyEntry } from '../pipeline/types.ts'
 
-export type FleetPulseStore = TelemetrySlice & ObsSlice & HealthSlice & FleetSlice & PresenceSlice & RoutesSlice
+export type FleetPulseStore = TelemetrySlice & ObsSlice & HealthSlice & FleetSlice & PresenceSlice & RoutesSlice & SelectionSlice
 
 /** The store factory. Tests call this directly for per-test isolation
  * (a fresh, unshared instance every time). Production code should not call
@@ -37,6 +39,7 @@ export function createFleetPulseStore(): UseBoundStore<StoreApi<FleetPulseStore>
     ...createFleetSlice(...args),
     ...createPresenceSlice(...args),
     ...createRoutesSlice(...args),
+    ...createSelectionSlice(...args),
   }))
 }
 

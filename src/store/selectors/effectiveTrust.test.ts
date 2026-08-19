@@ -69,12 +69,21 @@ describe('selectEffectiveTrust + tickEffectiveTrust (store wiring)', () => {
     expect(selectEffectiveTrust('truck_9', 'fuel')(store.getState())).toBeNull()
   })
 
-  it('setDegraded flips every signal to degraded via the same selector', () => {
+  it('AD-9: either named health condition flips every signal to degraded via the same selector', () => {
     const store = createFleetPulseStore()
     store.getState().applyTelemetryCommits([
       { truckId: 'truck_1', signals: [{ signal: 'fuel', live: { value: 70, trust: 'trusted', readingTs: 0, arrivalTs: 0 }, historyEntries: [] }] },
     ])
-    store.getState().setDegraded(true, 'telemetryStreamDown')
+    store.getState().setTelemetryStreamDown(true)
+    expect(selectEffectiveTrust('truck_1', 'fuel')(store.getState())).toBe('degraded')
+  })
+
+  it('AD-9: fleetFetchFailing alone also flips to degraded', () => {
+    const store = createFleetPulseStore()
+    store.getState().applyTelemetryCommits([
+      { truckId: 'truck_1', signals: [{ signal: 'fuel', live: { value: 70, trust: 'trusted', readingTs: 0, arrivalTs: 0 }, historyEntries: [] }] },
+    ])
+    store.getState().setFleetFetchFailing(true)
     expect(selectEffectiveTrust('truck_1', 'fuel')(store.getState())).toBe('degraded')
   })
 })

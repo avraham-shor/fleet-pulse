@@ -82,6 +82,12 @@
   border: 1px solid var(--border, #e5e4e7);
   border-radius: 6px;
   font-size: 14px;
+  cursor: pointer;
+}
+
+.rosterRow:hover,
+.rosterRow:focus-visible {
+  border-color: var(--accent, #aa3bff);
 }
 
 .statusDot {

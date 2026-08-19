@@ -44,6 +44,6 @@ development_status:
   1-6-dispatcher-presence: review
   1-7-route-lifecycle-management: review
   1-8-conflict-avoidance-and-resolution: review
-  1-9-vehicle-detail-panel-resilience-and-degraded-mode: backlog
+  1-9-vehicle-detail-panel-resilience-and-degraded-mode: review
   1-10-observability-and-submission-traceability: backlog
   epic-1-retrospective: optional

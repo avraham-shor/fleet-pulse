@@ -17,7 +17,7 @@
 // uses.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { Truck } from '../../../contract/rest.ts'
 import type { PipelineCommit } from '../../../pipeline/index.ts'
 import { CLIENT_THRESHOLDS } from '../../../../shared/constants.js'
@@ -150,5 +150,28 @@ describe('FleetOverview', () => {
     store.getState().tickStaleness(CLIENT_THRESHOLDS.STALENESS_BADGE_THRESHOLD_MS + 1)
     rerender(<FleetOverview />)
     expect(screen.getByText('Stale')).toBeTruthy()
+  })
+
+  it('FR-20: clicking a roster row dispatches selectTruck with that truck\'s id', async () => {
+    const { store, FleetOverview } = await freshHarness()
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' }), makeTruck({ truckId: 'truck_2', status: 'idle' })])
+
+    render(<FleetOverview />)
+    expect(store.getState().selection.selectedTruckId).toBeNull()
+
+    fireEvent.click(screen.getByTestId('roster-row-truck_2'))
+    expect(store.getState().selection.selectedTruckId).toBe('truck_2')
+
+    fireEvent.click(screen.getByTestId('roster-row-truck_1'))
+    expect(store.getState().selection.selectedTruckId).toBe('truck_1')
+  })
+
+  it('FR-20: pressing Enter on a focused roster row also selects it (keyboard affordance)', async () => {
+    const { store, FleetOverview } = await freshHarness()
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' })])
+
+    render(<FleetOverview />)
+    fireEvent.keyDown(screen.getByTestId('roster-row-truck_1'), { key: 'Enter' })
+    expect(store.getState().selection.selectedTruckId).toBe('truck_1')
   })
 })

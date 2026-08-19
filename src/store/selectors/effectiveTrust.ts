@@ -1,7 +1,8 @@
 // FleetPulse — the one effective-trust selector (AD-3)
 //
 // Layers staleness (arrival clock vs. STALENESS_BADGE_THRESHOLD_MS) and
-// `health.isDegraded` on top of the pipeline's per-signal plausibility
+// degraded (AD-9's `health.telemetryStreamDown`/`fleetFetchFailing`, ORed
+// via `selectIsDegraded`) on top of the pipeline's per-signal plausibility
 // trust, producing trust-model.md's five-state result. This is the only
 // trust source a future widget reads — nothing above the store re-derives
 // staleness or degraded state itself (AD-3, AD-9).
@@ -15,6 +16,7 @@
 import { CLIENT_THRESHOLDS } from '../../../shared/constants.js'
 import type { Reading, SignalName } from '../../pipeline/types.ts'
 import { selectSignalTelemetry } from '../slices/telemetrySlice.ts'
+import { selectIsDegraded } from '../slices/healthSlice.ts'
 import type { FleetPulseStore } from '../store.ts'
 
 /** The five PRD trust-model.md states. `null` is not a sixth state — it
@@ -38,7 +40,7 @@ export function computeEffectiveTrust(
 export function selectEffectiveTrust(truckId: string, signal: SignalName) {
   return (state: Pick<FleetPulseStore, 'telemetry' | 'health'>): EffectiveTrust | null => {
     const signalTelemetry = selectSignalTelemetry(state, truckId, signal)
-    return computeEffectiveTrust(signalTelemetry?.latest ?? null, state.health.nowMs, state.health.isDegraded)
+    return computeEffectiveTrust(signalTelemetry?.latest ?? null, state.health.nowMs, selectIsDegraded(state))
   }
 }
 

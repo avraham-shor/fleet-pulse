@@ -67,8 +67,31 @@ function TruckMarkerGroup({ truck, position, trail, project }: TruckMarkerGroupP
 
 function TruckRosterRow({ truck }: { truck: Truck }) {
   const trust = useFleetPulseStore(selectEffectiveTrust(truck.truckId, 'position'))
+
+  // FR-20: the roster row is the click affordance that opens the detail
+  // panel — dispatches into the shared `selectionSlice`, never a direct
+  // prop/callback into `VehicleDetail` (widgets communicate only through
+  // the store, Design Notes). `useFleetPulseStore.getState()` reads the
+  // action without subscribing to it — this handler doesn't need to
+  // re-render when the selection changes.
+  function handleSelect() {
+    useFleetPulseStore.getState().selectTruck(truck.truckId)
+  }
+
   return (
-    <li className={styles.rosterRow}>
+    <li
+      className={styles.rosterRow}
+      data-testid={`roster-row-${truck.truckId}`}
+      role="button"
+      tabIndex={0}
+      onClick={handleSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          handleSelect()
+        }
+      }}
+    >
       <span className={styles.statusDot} data-status={truck.status} aria-hidden="true" />
       <span className={styles.truckId}>{truck.truckId}</span>
       <span className={styles.statusLabel}>{truck.status}</span>

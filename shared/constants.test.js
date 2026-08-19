@@ -24,6 +24,7 @@ const EXPECTED_CLIENT_THRESHOLDS_KEYS = [
   'STALENESS_TICK_MS',
   'RECONNECT_BACKOFF_MULTIPLIER',
   'BREAKER_FAILURE_THRESHOLD',
+  'TRUCK_ALERT_CAP',
 ]
 
 const EXPECTED_SERVER_PARAMS_KEYS = [
@@ -183,5 +184,9 @@ describe('shared/constants', () => {
 
   it('sizes the audit trail cap to match its sibling caps (story 7 design notes, AD-10)', () => {
     expect(CLIENT_THRESHOLDS.AUDIT_TRAIL_CAP).toBe(CLIENT_THRESHOLDS.TELEMETRY_HISTORY_CAP_PER_SIGNAL)
+  })
+
+  it('sizes the truck-alert cap to match its sibling caps (story 9 design notes, AD-10)', () => {
+    expect(CLIENT_THRESHOLDS.TRUCK_ALERT_CAP).toBe(CLIENT_THRESHOLDS.TELEMETRY_HISTORY_CAP_PER_SIGNAL)
   })
 })

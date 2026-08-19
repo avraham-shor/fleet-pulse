@@ -86,6 +86,13 @@ export const CLIENT_THRESHOLDS = Object.freeze({
   // Three consecutive failed 503s open the circuit (AD-8, FR-25);
   // each completed attempt counts, retries included
   BREAKER_FAILURE_THRESHOLD: 3,
+
+  // AD-10/NFR-3: cap on fleetSlice's per-truck `truck_alert` boundedBuffer
+  // (createBoundedBuffer, mirroring ANOMALY_LOG_CAP/AUDIT_TRAIL_CAP's own
+  // pattern). No existing constant covered this (story 9 design notes) —
+  // sized to match its sibling caps rather than inventing an unrelated
+  // number.
+  TRUCK_ALERT_CAP: 300,
 })
 
 // --- Server emission parameters --------------------------------------------

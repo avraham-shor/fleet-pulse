@@ -5,8 +5,8 @@
     npm start / npm test scripts. Author shared/constants.js holding every
     tunable for both sides, per the SPEC constraint that no tunable literal
     lives anywhere else.
-  spec_checkpoint: false
-  done_checkpoint: false
+  spec_checkpoint: true
+  done_checkpoint: true
   invoke_dev_with: ""
 
 - id: "2"
@@ -17,7 +17,7 @@
     eight failure modes, and the quarantined /api/dev/quirk/:id triggers.
     Includes the contract test asserting every emission parses against the
     wire-type declarations.
-  spec_checkpoint: false
+  spec_checkpoint: true
   done_checkpoint: true
   invoke_dev_with: ""
 
@@ -28,8 +28,8 @@
     connection owners and the single mutation gate — sse-manager, ws-manager
     with register/keepalive/reconnect, and api-client injecting
     X-Dispatcher-Id and If-Match with one normalized error union.
-  spec_checkpoint: false
-  done_checkpoint: false
+  spec_checkpoint: true
+  done_checkpoint: true
   invoke_dev_with: ""
 
 - id: "4"
@@ -40,7 +40,7 @@
     boundedBuffer, the coalescing commit, and the one effective-trust
     selector. The mandated FR-6, FR-7, and FR-8 test cases land here.
   spec_checkpoint: true
-  done_checkpoint: false
+  done_checkpoint: true
   invoke_dev_with: ""
 
 - id: "5"
@@ -50,8 +50,8 @@
     newest-by-timestamp batch snapping with its sorted trail, and staleness
     badges. Establishes the widget registry, per-widget error boundaries, and
     the shared TrustBadge every later widget reuses.
-  spec_checkpoint: false
-  done_checkpoint: false
+  spec_checkpoint: true
+  done_checkpoint: true
   invoke_dev_with: ""
 
 - id: "6"
@@ -61,8 +61,8 @@
     truck-viewing indicator including the explicit null clear, and the FR-19
     ghost rules with their three mandated tests. Precedes the route stories
     because mutations stay disabled while the dispatcher is unregistered.
-  spec_checkpoint: false
-  done_checkpoint: false
+  spec_checkpoint: true
+  done_checkpoint: true
   invoke_dev_with: ""
 
 - id: "7"
@@ -72,8 +72,8 @@
     single mutation gate, with the WS echo as sole writer of the routes slice,
     confirmation on destructive actions, the FR-34 busy-truck guard, and the
     session-scoped audit trail. Conflict handling is story 8.
-  spec_checkpoint: false
-  done_checkpoint: false
+  spec_checkpoint: true
+  done_checkpoint: true
   invoke_dev_with: ""
 
 - id: "8"
@@ -84,7 +84,7 @@
     plus the FR-31 inline notice that fires before a save is attempted. The
     brief's flagged senior-level design challenge; not cuttable.
   spec_checkpoint: true
-  done_checkpoint: false
+  done_checkpoint: true
   invoke_dev_with: ""
 
 - id: "9"
@@ -94,8 +94,8 @@
     bounded history, route details and broadcast alerts, alongside
     Retry-After handling, the named-condition degraded banner with its clear
     hysteresis, socket reconnection, and the fleet_reset sequence.
-  spec_checkpoint: false
-  done_checkpoint: false
+  spec_checkpoint: true
+  done_checkpoint: true
   invoke_dev_with: ""
 
 - id: "10"

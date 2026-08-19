@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { createFleetPulseStore } from '../store.ts'
-import { selectRoutes, selectAuditTrail } from './routesSlice.ts'
+import { selectRoutes, selectAuditTrail, selectRouteForTruck } from './routesSlice.ts'
 import { CLIENT_THRESHOLDS } from '../../../shared/constants.js'
 import type { Route } from '../../contract/rest.ts'
 
@@ -103,5 +103,46 @@ describe('routesSlice', () => {
     expect(() => store.getState().applyRouteAssigned(route)).not.toThrow()
     expect(selectRoutes(store.getState())).toHaveLength(1)
     expect(selectAuditTrail(store.getState())).toHaveLength(1) // the replay never appended a second row
+  })
+
+  it('FR-23: selectRouteForTruck finds the truck\'s assigned/in-progress route, ignoring terminal ones', () => {
+    const store = createFleetPulseStore()
+    store.getState().applyRouteAssigned(makeRoute({ routeId: 'route_old', truckId: 'truck_1', version: 1, status: 'cancelled' }))
+    store.getState().applyRouteAssigned(makeRoute({ routeId: 'route_active', truckId: 'truck_1', version: 1, status: 'assigned' }))
+
+    expect(selectRouteForTruck(store.getState(), 'truck_1')?.routeId).toBe('route_active')
+  })
+
+  it('selectRouteForTruck reads null when the truck has no active route (FR-23 empty state)', () => {
+    const store = createFleetPulseStore()
+    expect(selectRouteForTruck(store.getState(), 'truck_9')).toBeNull()
+
+    store.getState().applyRouteAssigned(makeRoute({ truckId: 'truck_9', status: 'completed' }))
+    expect(selectRouteForTruck(store.getState(), 'truck_9')).toBeNull()
+  })
+
+  it('FR-33: resetRoutes wipes the route map but leaves the audit trail intact', () => {
+    const store = createFleetPulseStore()
+    store.getState().applyRouteAssigned(makeRoute())
+    expect(selectRoutes(store.getState())).toHaveLength(1)
+    expect(selectAuditTrail(store.getState())).toHaveLength(1)
+
+    store.getState().resetRoutes()
+
+    expect(selectRoutes(store.getState())).toEqual([])
+    expect(selectAuditTrail(store.getState())).toHaveLength(1) // audit trail survives (not in this story's wipe list)
+  })
+
+  it('resetRoutes is safe to re-populate afterward (the re-hydration half of fleet_reset)', () => {
+    const store = createFleetPulseStore()
+    store.getState().applyRouteAssigned(makeRoute({ version: 5 }))
+    store.getState().resetRoutes()
+    // A route re-arriving (e.g. from a post-reset GET /api/routes hydration)
+    // at a version <= the one this slice already forgot must not be
+    // rejected as a stale echo — the guard compares against the *current*
+    // (now-empty) map, not history.
+    store.getState().applyRouteAssigned(makeRoute({ version: 1 }))
+    expect(selectRoutes(store.getState())).toHaveLength(1)
+    expect(selectRoutes(store.getState())[0]?.version).toBe(1)
   })
 })

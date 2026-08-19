@@ -211,6 +211,43 @@ describe('sse-manager', () => {
     expect(instances).toHaveLength(2) // no new source created from the stale callbacks
   })
 
+  it('AD-9/FR-26: onConnectionChange fires true on open and false on error, and never for a stale superseded source', () => {
+    const onConnectionChange = vi.fn()
+    const instances: FakeEventSource[] = []
+    const manager = createSseManager({
+      onBatch: vi.fn(),
+      onConnectionChange,
+      createEventSource: (url) => {
+        const source = new FakeEventSource(url)
+        instances.push(source)
+        return source
+      },
+    })
+
+    manager.connect()
+    expect(onConnectionChange).not.toHaveBeenCalled()
+
+    instances[0]!.simulateOpen()
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true)
+
+    instances[0]!.simulateError()
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false)
+
+    vi.advanceTimersByTime(CLIENT_THRESHOLDS.RECONNECT_BACKOFF_INITIAL_MS)
+    expect(instances).toHaveLength(2)
+    onConnectionChange.mockClear()
+
+    // A late callback from the now-superseded first source must never fire
+    // onConnectionChange again.
+    instances[0]!.onopen?.()
+    instances[0]!.onerror?.()
+    expect(onConnectionChange).not.toHaveBeenCalled()
+
+    instances[1]!.simulateOpen()
+    expect(onConnectionChange).toHaveBeenCalledTimes(1)
+    expect(onConnectionChange).toHaveBeenLastCalledWith(true)
+  })
+
   it('close() tears the connection down for good — no further reconnect attempts', () => {
     const { manager, instances } = setup()
     manager.connect()

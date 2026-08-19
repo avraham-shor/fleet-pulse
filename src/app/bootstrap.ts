@@ -3,18 +3,29 @@
 // The sole bridge from transport lifecycle into pipeline/store: constructs
 // every transport/pipeline/store/scheduler instance this story needs,
 // wires pipeline output into the coalescing scheduler, wires the SSE
-// manager's frames into the pipeline, wires the WS manager's presence
-// events into the presence slice (dispatcher_joined/_left commit directly;
-// dispatcher_viewing rides the same coalescing scheduler, AD-5), fetches
-// the initial 12-truck roster once (SSE delivers deltas only), and starts
-// the one `STALENESS_TICK_MS` interval that both re-evaluates the
-// effective-trust selector (AD-3) and sweeps stale presence entries
-// (FR-19's liveness rule, piggybacked on the same tick). Nothing above
-// `app/` constructs any of these directly.
+// manager's frames into the pipeline, wires the WS manager's presence/
+// route/alert events into their owning slices (dispatcher_joined/_left and
+// route events commit directly; dispatcher_viewing rides the coalescing
+// scheduler, AD-5), fetches the initial 12-truck roster once (SSE delivers
+// deltas only), and starts the one `STALENESS_TICK_MS` interval that
+// re-evaluates the effective-trust selector (AD-3), sweeps stale presence
+// entries (FR-19's liveness rule), and polls the circuit breaker's state
+// into the health slice (AD-9) — all piggybacked on the same tick rather
+// than adding three separate intervals. Nothing above `app/` constructs
+// any of these directly.
 //
 // `wsManager` connects eagerly, same as `sseManager` — no blocking gate
 // (Boundaries & Constraints). `getDispatcherId` now reads the WS manager's
 // live session-scoped identity (AD-17) instead of the story-1.5 stub.
+//
+// Story 9 wires the health slice's two AD-9 conditions: `sseManager`'s new
+// `onConnectionChange` callback drives `telemetryStreamDown` directly
+// (event-driven — up/down is known the instant it happens); `apiClient`'s
+// breaker has no such callback (it's a plain polled getter, read-only from
+// this story per Boundaries), so `fleetFetchFailing` is polled from
+// `getBreakerState()` on the same staleness tick instead. It also wires the
+// real `fleet_reset`/`truck_alert` handlers into the WS message switch,
+// previously falling to `default: return`.
 //
 // `getBootstrap()` is memoized at module scope so React 19 StrictMode's
 // dev-only double-invoke of effects (mount -> cleanup -> mount) never opens
@@ -25,7 +36,7 @@ import { createApiClient, type ApiClient } from '../transport/api-client.ts'
 import { createSseManager } from '../transport/sse-manager.ts'
 import { createWsManager, setWsSendFacade, type WsManager } from '../transport/ws-manager.ts'
 import type { ServerWsMessage } from '../contract/ws-server.ts'
-import { createPipeline } from '../pipeline/index.ts'
+import { createPipeline, type Pipeline } from '../pipeline/index.ts'
 import { createCoalescingCommitScheduler, getFleetPulseStore, type CoalescingCommitScheduler, type FleetPulseStore } from '../store/store.ts'
 import { tickEffectiveTrust } from '../store/selectors/effectiveTrust.ts'
 import { CLIENT_THRESHOLDS } from '../../shared/constants.js'
@@ -70,13 +81,55 @@ async function hydrateRoutes(store: UseBoundStore<StoreApi<FleetPulseStore>>, ap
   }
 }
 
-/** Routes each recognized WS message this story owns into the presence and
- * routes slices. Every other recognized type (alert/reset events) is a
- * future story's concern — safely ignored here rather than crashing
- * (FR-33: unknown-to-*this*-wiring messages never break the UI). */
+/** AD-8's `fleet_reset` sequence, in the exact order this story's
+ * Boundaries & Constraints specify: `pipeline.reset()` (drop the pending
+ * coalesce buffer, per-truck cursors, dedupe sets, open suspect windows),
+ * `resetTelemetry()`, `resetObs()`, `resetFleetAlerts()` (code-review
+ * finding: this story's own per-truck alert buffers are session-scoped
+ * derived state too — trust-model.md documents the anomaly log as "wiped by
+ * a fleet reset along with the rest of derived state," and alerts are the
+ * same category — grouped here alongside `resetObs()` since both wipe a
+ * bounded, session-accumulated log), a routes reset + re-hydration
+ * (`resetRoutes()` then reusing `hydrateRoutes()`'s existing `GET
+ * /api/routes` seam — never a second fetch path), `resetPresence()` (the
+ * server re-announces current dispatchers after broadcasting `fleet_reset`,
+ * AD-17, so this client rebuilds the same way a reconnect does), and
+ * finally, only while the breaker is open, `forceNextProbe()` plus the one
+ * `getFleet()` call that actually performs the "immediate probe" FR-33
+ * promises — `forceNextProbe()` alone only clears the scheduled-probe gate,
+ * it doesn't itself contact the server. */
+function runFleetReset(
+  store: UseBoundStore<StoreApi<FleetPulseStore>>,
+  pipeline: Pipeline,
+  apiClient: ApiClient,
+): void {
+  pipeline.reset()
+  store.getState().resetTelemetry()
+  store.getState().resetObs()
+  store.getState().resetFleetAlerts()
+  store.getState().resetRoutes()
+  void hydrateRoutes(store, apiClient)
+  store.getState().resetPresence()
+  if (apiClient.getBreakerState() === 'open') {
+    apiClient.forceNextProbe()
+    void apiClient.getFleet().then((result) => {
+      if (result.ok) store.getState().setFleet(result.data)
+      else store.getState().setFleetFetchFailed()
+    })
+  }
+}
+
+/** Routes each recognized WS message into its owning slice: presence
+ * (join/leave direct-commit, viewing through the coalescing scheduler),
+ * routes (direct-commit, AD-16's sole-writer echo), `truck_alert` (FR-32,
+ * CM1), and `fleet_reset` (AD-8, FR-33). Every other recognized-but-
+ * unhandled type is safely ignored (FR-33: unknown/dev-only messages never
+ * break the UI). */
 function handlePresenceMessage(
   store: UseBoundStore<StoreApi<FleetPulseStore>>,
   scheduler: CoalescingCommitScheduler,
+  pipeline: Pipeline,
+  apiClient: ApiClient,
   msg: ServerWsMessage,
 ): void {
   switch (msg.type) {
@@ -101,6 +154,20 @@ function handlePresenceMessage(
     case 'route_reassigned':
       store.getState().applyRouteReassigned(msg.route)
       return
+    case 'truck_alert':
+      // FR-32/CM1: per-truck bounded buffer, stub-upserting an unrecognized
+      // truckId — handled entirely inside `addTruckAlert` (fleetSlice.ts).
+      store.getState().addTruckAlert({
+        truckId: msg.truckId,
+        message: msg.message,
+        dispatcherId: msg.dispatcherId,
+        dispatcherName: msg.dispatcherName,
+        timestamp: msg.timestamp,
+      })
+      return
+    case 'fleet_reset':
+      runFleetReset(store, pipeline, apiClient)
+      return
     default:
       return
   }
@@ -113,7 +180,13 @@ function createBootstrap(): Bootstrap {
     onCommit: scheduler.ingestPipelineCommit,
     onAnomaly: scheduler.ingestAnomalies,
   })
-  const sseManager = createSseManager({ onBatch: pipeline.ingest })
+  // AD-9: `telemetryStreamDown` is set directly from the SSE connection's
+  // own up/down events — event-driven, not polled (contrast the breaker
+  // below, which has no equivalent callback).
+  const sseManager = createSseManager({
+    onBatch: pipeline.ingest,
+    onConnectionChange: (connected) => store.getState().setTelemetryStreamDown(!connected),
+  })
 
   // Forward-referenced: `apiClient`'s `getDispatcherId` reads this live on
   // every call (AD-17), but `wsManager` itself needs an `onConnect`
@@ -124,7 +197,7 @@ function createBootstrap(): Bootstrap {
   const apiClient = createApiClient({ getDispatcherId: () => wsManager?.getDispatcherId() ?? null })
 
   wsManager = createWsManager({
-    onMessage: (msg) => handlePresenceMessage(store, scheduler, msg),
+    onMessage: (msg) => handlePresenceMessage(store, scheduler, pipeline, apiClient, msg),
     onConnect: () => {
       // AD-8: the presence slice clears before the server's replay-on-
       // register rebuilds it fresh — fires on every successful connection,
@@ -147,6 +220,10 @@ function createBootstrap(): Bootstrap {
   wsManager.connect() // eager, no blocking gate — mirrors sseManager.connect()
   startInitialFleetFetch(store, apiClient)
   stalenessIntervalId = setInterval(() => {
+    // AD-9: the breaker exposes no change callback (read-only from this
+    // story) — polled here, on the same 1s cadence as everything else this
+    // tick already drives, rather than adding a second interval.
+    store.getState().setFleetFetchFailing(apiClient.getBreakerState() === 'open')
     tickEffectiveTrust(store.getState())
     store.getState().sweepStalePresence(Date.now()) // FR-19 liveness sweep, piggybacked on this same tick
   }, CLIENT_THRESHOLDS.STALENESS_TICK_MS)

@@ -102,6 +102,15 @@ function makeResponse(status: number, body: unknown): Response {
   } as unknown as Response
 }
 
+function makeResponseWithHeader(status: number, body: unknown, headers: Record<string, string> = {}): Response {
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    headers: { get: (name: string) => headers[name] ?? null },
+    json: async () => body,
+  } as unknown as Response
+}
+
 function makeRoute(overrides: Partial<Route> = {}): Route {
   return {
     routeId: 'route_1',
@@ -289,13 +298,13 @@ describe('getBootstrap: presence wiring (FR-16..19, AD-8)', () => {
     expect(store.getState().presence.dispatchers['dispatcher_1']).toBeUndefined()
   })
 
-  it('FR-33: an unhandled recognized WS message type (e.g. fleet_reset) is safely ignored by this wiring, never a crash', async () => {
+  it('FR-33: an unrecognized WS message type is safely ignored (dropped by ws-manager itself before reaching this wiring), never a crash', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
     const { getBootstrap } = await freshBootstrapWithWs()
     const { store } = getBootstrap()
 
     FakeWebSocket.instances[0]!.simulateOpen()
-    expect(() => FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'fleet_reset' })).not.toThrow()
+    expect(() => FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'not_a_real_message_type' })).not.toThrow()
     expect(store.getState().presence.dispatchers).toEqual({})
   })
 })
@@ -400,5 +409,176 @@ describe('getBootstrap: routes wiring (FR-10..15, FR-34, AD-16, AD-7)', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(fetchMock).toHaveBeenCalledWith('/api/routes')
+  })
+})
+
+describe('getBootstrap: health slice wiring (AD-9, FR-25, FR-26)', () => {
+  it('AD-9: SSE onConnectionChange(false) sets telemetryStreamDown immediately; recovering only clears it after the hysteresis window', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+    const { getBootstrap } = await freshBootstrapModule()
+    const { store } = getBootstrap()
+
+    expect(FakeEventSource.instances).toHaveLength(1)
+    FakeEventSource.instances[0]!.onopen?.()
+    expect(store.getState().health.telemetryStreamDown).toBe(false)
+
+    FakeEventSource.instances[0]!.onerror?.()
+    expect(store.getState().health.telemetryStreamDown).toBe(true)
+
+    // Reconnect and recover — the condition must not clear on the spot.
+    await vi.advanceTimersByTimeAsync(CLIENT_THRESHOLDS.RECONNECT_BACKOFF_INITIAL_MS)
+    expect(FakeEventSource.instances).toHaveLength(2)
+    FakeEventSource.instances[1]!.onopen?.()
+    expect(store.getState().health.telemetryStreamDown).toBe(true) // still down — hysteresis pending
+
+    await vi.advanceTimersByTimeAsync(CLIENT_THRESHOLDS.BANNER_CLEAR_HYSTERESIS_MS + CLIENT_THRESHOLDS.STALENESS_TICK_MS)
+    expect(store.getState().health.telemetryStreamDown).toBe(false)
+  })
+
+  it('AD-9: fleetFetchFailing is polled from apiClient.getBreakerState() on the staleness tick after the breaker opens', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeResponseWithHeader(503, { error: 'fleet_unavailable', message: 'busy' }, { 'Retry-After': '1' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { getBootstrap } = await freshBootstrapModule()
+    const { store } = getBootstrap()
+
+    // Exhaust the initial getFleet() call's own FR-24 retry loop (three
+    // consecutive 503s, each followed by a Retry-After-honoring sleep)
+    // until FR-25's threshold opens the breaker.
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(store.getState().fleet.fetchStatus).toBe('error')
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(CLIENT_THRESHOLDS.BREAKER_FAILURE_THRESHOLD)
+
+    // The poll happens on the staleness tick, already fired repeatedly
+    // during the 5s advance above — fleetFetchFailing should already
+    // reflect the now-open breaker.
+    expect(store.getState().health.fleetFetchFailing).toBe(true)
+  })
+})
+
+describe('getBootstrap: truck_alert wiring (FR-32, CM1)', () => {
+  it('FR-32: a truck_alert WS message lands in the fleet slice via addTruckAlert', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    FakeWebSocket.instances[0]!.simulateServerMessage({
+      type: 'truck_alert',
+      truckId: 'truck_1',
+      message: 'Check tire pressure',
+      dispatcherId: 'dispatcher_1',
+      dispatcherName: 'Alice',
+      timestamp: 1_000,
+    })
+
+    expect(store.getState().fleet.alerts['truck_1']?.toArray()).toEqual([
+      { truckId: 'truck_1', message: 'Check tire pressure', dispatcherId: 'dispatcher_1', dispatcherName: 'Alice', timestamp: 1_000 },
+    ])
+  })
+
+  it('CM1: a truck_alert for an unrecognized truckId upserts a stub truck instead of being dropped', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [makeTruck({ truckId: 'truck_1' })])))
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+    await vi.advanceTimersByTimeAsync(0)
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    FakeWebSocket.instances[0]!.simulateServerMessage({
+      type: 'truck_alert',
+      truckId: 'truck_99',
+      message: 'Unrecognized truck',
+      dispatcherId: 'dispatcher_1',
+      dispatcherName: 'Alice',
+      timestamp: 2_000,
+    })
+
+    expect(store.getState().fleet.trucks['truck_99']).toBeDefined()
+    expect(store.getState().fleet.alerts['truck_99']?.toArray()).toHaveLength(1)
+    // The already-known truck's own roster entry is untouched.
+    expect(store.getState().fleet.trucks['truck_1']).toBeDefined()
+  })
+})
+
+describe('getBootstrap: fleet_reset wiring (AD-8, FR-33)', () => {
+  it('FR-33: runs the full AD-8 sequence — pipeline/telemetry/obs/alerts/routes/presence wiped, routes re-hydrated', async () => {
+    const fetchMock = makeUrlAwareFetch({ routes: makeResponse(200, [makeRoute()]) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    await vi.advanceTimersByTimeAsync(0) // let onConnect's hydrateRoutes() resolve
+    expect(store.getState().routes.routes['route_1']).toBeDefined()
+
+    // Seed state fleet_reset is supposed to wipe.
+    store.getState().applyTelemetryCommits([
+      { truckId: 'truck_1', signals: [{ signal: 'speed', live: { value: 60, trust: 'trusted', readingTs: 0, arrivalTs: 0 }, historyEntries: [] }] },
+    ])
+    store.getState().pushAnomalies([{ ruleId: 'r1', truckId: 'truck_1', rawValue: 999, readingTs: 0, arrivalTs: 0 }])
+    store.getState().dispatcherJoined('dispatcher_2', 'Bob')
+    store.getState().addTruckAlert({
+      truckId: 'truck_1',
+      message: 'Check tire pressure',
+      dispatcherId: 'dispatcher_1',
+      dispatcherName: 'Alice',
+      timestamp: 1_000,
+    })
+    expect(store.getState().telemetry.trucks['truck_1']).toBeDefined()
+    expect(store.getState().obs.anomalyLog.size()).toBe(1)
+    expect(Object.keys(store.getState().presence.dispatchers)).toContain('dispatcher_2')
+    expect(store.getState().fleet.alerts['truck_1']?.size()).toBe(1)
+
+    FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'fleet_reset' })
+
+    // Synchronous half of the sequence.
+    expect(store.getState().telemetry.trucks).toEqual({})
+    expect(store.getState().obs.anomalyLog.size()).toBe(0)
+    expect(store.getState().routes.routes).toEqual({})
+    expect(store.getState().presence.dispatchers).toEqual({})
+    // Code-review finding: this story's own per-truck alert buffers are
+    // session-scoped derived state too — the same category as the anomaly
+    // log — and must be wiped alongside it.
+    expect(store.getState().fleet.alerts).toEqual({})
+
+    // Re-hydration (async GET /api/routes) catches routes back up.
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.getState().routes.routes['route_1']).toBeDefined()
+  })
+
+  it("FR-33: an open circuit gets an immediate probe on fleet_reset — forceNextProbe() plus the getFleet() call that actually performs it", async () => {
+    let attempt = 0
+    const fetchMock = vi.fn((input: unknown) => {
+      const url = String(input)
+      if (url.includes('/api/routes')) return Promise.resolve(makeResponse(200, []))
+      attempt += 1
+      if (attempt <= CLIENT_THRESHOLDS.BREAKER_FAILURE_THRESHOLD) {
+        return Promise.resolve(makeResponseWithHeader(503, { error: 'fleet_unavailable', message: 'busy' }, { 'Retry-After': '1' }))
+      }
+      return Promise.resolve(makeResponse(200, [makeTruck({ truckId: 'truck_1' })]))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+
+    // Exhaust the initial retry loop until the breaker opens.
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(store.getState().fleet.fetchStatus).toBe('error')
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    await vi.advanceTimersByTimeAsync(0)
+
+    FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'fleet_reset' })
+    await vi.advanceTimersByTimeAsync(0) // let the forced probe's getFleet() resolve
+
+    expect(store.getState().fleet.trucks['truck_1']).toBeDefined()
+    expect(store.getState().fleet.fetchStatus).toBe('ready')
+
+    // AD-9/FR-26 coverage gap (code review): the successful probe closed the
+    // breaker, but `health.fleetFetchFailing` only follows it once the
+    // staleness-tick poll observes `getBreakerState() === 'closed'` and the
+    // hysteresis window then elapses — never on the spot.
+    expect(store.getState().health.fleetFetchFailing).toBe(true) // not yet — hysteresis pending
+    await vi.advanceTimersByTimeAsync(CLIENT_THRESHOLDS.BANNER_CLEAR_HYSTERESIS_MS + CLIENT_THRESHOLDS.STALENESS_TICK_MS)
+    expect(store.getState().health.fleetFetchFailing).toBe(false)
   })
 })

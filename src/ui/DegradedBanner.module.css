@@ -1,0 +1,16 @@
+.banner {
+  padding: 10px 24px;
+  background: rgba(217, 79, 79, 0.1);
+  border-bottom: 1px solid rgba(217, 79, 79, 0.4);
+  color: #a01f1f;
+  font-size: 14px;
+  text-align: center;
+}
+
+@media (prefers-color-scheme: dark) {
+  .banner {
+    background: rgba(217, 79, 79, 0.18);
+    border-bottom-color: rgba(217, 79, 79, 0.45);
+    color: #ff9b9b;
+  }
+}

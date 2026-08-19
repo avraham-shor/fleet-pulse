@@ -10,9 +10,11 @@ import { useEffect } from 'react'
 import { getBootstrap } from './bootstrap.ts'
 import { getWidgets } from '../ui/registry.ts'
 import { ErrorBoundary } from '../ui/ErrorBoundary.tsx'
+import { DegradedBanner } from '../ui/DegradedBanner.tsx'
 import '../ui/widgets/fleetOverview/FleetOverview.tsx'
 import '../ui/widgets/presence/PresencePanel.tsx'
 import '../ui/widgets/routes/RoutesPanel.tsx'
+import '../ui/widgets/vehicleDetail/VehicleDetail.tsx'
 import styles from './App.module.css'
 
 export default function App() {
@@ -27,6 +29,14 @@ export default function App() {
       <header className={styles.header}>
         <h1>FleetPulse</h1>
       </header>
+      {/* Global dashboard chrome, not a per-truck panel — mounted directly
+       * here rather than through the widget registry (Design Notes). Still
+       * gets its own containment boundary (FR-28, code-review finding):
+       * being outside the registry must not mean being the one piece of UI
+       * with no failure containment at all. */}
+      <ErrorBoundary widgetTitle="Degraded banner">
+        <DegradedBanner />
+      </ErrorBoundary>
       <main className={styles.main}>
         {widgets.map((widget) => (
           <ErrorBoundary key={widget.id} widgetTitle={widget.title}>

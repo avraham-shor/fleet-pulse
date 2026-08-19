@@ -17,7 +17,7 @@
 // all start fresh.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { Truck } from '../contract/rest.ts'
 
 class FakeEventSource {
@@ -169,5 +169,57 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: 'Active routes' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Audit trail' })).toBeTruthy()
     expect(screen.getByText('No routes yet')).toBeTruthy()
+  })
+
+  it('AD-6: the vehicle detail widget mounts through the shell via its own side-effect import, showing the placeholder before any truck is selected', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+
+    const App = await freshApp()
+    render(<App />)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Scoped to `p` (VehicleDetail's own placeholder): RoutesPanel's create
+    // form also renders a "Select a truck" `<option>` in the same shell.
+    expect(screen.getByText(/select a truck/i, { selector: 'p' })).toBeTruthy()
+  })
+
+  it('FR-20: clicking a roster row in the real shell opens the vehicle detail panel for that truck', async () => {
+    const trucks = [makeTruck({ truckId: 'truck_1' }), makeTruck({ truckId: 'truck_2', status: 'idle' })]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, trucks)))
+
+    const App = await freshApp()
+    const { rerender } = render(<App />)
+    await vi.advanceTimersByTimeAsync(0)
+    rerender(<App />)
+
+    fireEvent.click(screen.getByTestId('roster-row-truck_2'))
+    rerender(<App />)
+
+    expect(screen.getByRole('heading', { name: /truck_2/ })).toBeTruthy()
+  })
+
+  it('FR-26/AD-9: the degraded banner is global chrome, mounted once, not per-widget — absent while healthy', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+
+    const App = await freshApp()
+    render(<App />)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(screen.queryByTestId('degraded-banner')).toBeNull()
+  })
+
+  it('FR-26/FR-27: an SSE error flips the real shell into degraded mode, naming "telemetry stream down"', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+
+    const App = await freshApp()
+    const { rerender } = render(<App />)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(FakeEventSource.instances).toHaveLength(1)
+    FakeEventSource.instances[0]!.onerror?.()
+    rerender(<App />)
+
+    const banner = screen.getByTestId('degraded-banner')
+    expect(banner.textContent).toContain('telemetry stream down')
   })
 })

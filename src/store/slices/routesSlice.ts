@@ -65,6 +65,14 @@ export interface RoutesSlice {
   applyRouteUpdated: (route: Route) => void
   /** `route_reassigned` echo handler (FR-14). */
   applyRouteReassigned: (route: Route) => void
+  /** `fleet_reset` step (AD-8, FR-33): wipes the route map only — the
+   * session-scoped `auditTrail` survives (mirrors `resetObs`'s own
+   * "counters survive" convention), since nothing in this story's Boundaries
+   * asks for the trail itself to be cleared. `app/bootstrap.ts` follows this
+   * with `hydrateRoutes()` (the "re-hydration" half) so the slice catches
+   * back up from `GET /api/routes` rather than sitting empty until the next
+   * live echo. */
+  resetRoutes: () => void
 }
 
 function createInitialRoutesState(): RoutesState {
@@ -104,6 +112,7 @@ export const createRoutesSlice: StateCreator<FleetPulseStore, [], [], RoutesSlic
   applyRouteAssigned: (route) => set((state) => ({ routes: applyRouteEcho(state.routes, route, 'assigned') })),
   applyRouteUpdated: (route) => set((state) => ({ routes: applyRouteEcho(state.routes, route, 'updated') })),
   applyRouteReassigned: (route) => set((state) => ({ routes: applyRouteEcho(state.routes, route, 'reassigned') })),
+  resetRoutes: () => set((state) => ({ routes: { routes: {}, auditTrail: state.routes.auditTrail } })),
 })
 
 /** Every route this session has seen, truckId-ascending (numeric-aware,
@@ -120,4 +129,18 @@ export function selectRoutes(state: Pick<FleetPulseStore, 'routes'>): Route[] {
  * this reverses it for display only. */
 export function selectAuditTrail(state: Pick<FleetPulseStore, 'routes'>): RouteAuditEntry[] {
   return [...state.routes.auditTrail.toArray()].reverse()
+}
+
+/** The one truck→active-route lookup `VehicleDetail` reads (FR-23) —
+ * mirrors `RoutesPanel.tsx`'s own local `findActiveRouteForTruck` exactly
+ * (kept as two independent copies rather than a shared import per this
+ * story's Boundaries: `RoutesPanel.tsx` itself is untouched). `null` when
+ * the truck has no `assigned`/`in-progress` route — the panel's empty
+ * state, not an error. */
+export function selectRouteForTruck(state: Pick<FleetPulseStore, 'routes'>, truckId: string): Route | null {
+  return (
+    Object.values(state.routes.routes).find(
+      (route) => route.truckId === truckId && (route.status === 'assigned' || route.status === 'in-progress'),
+    ) ?? null
+  )
 }
