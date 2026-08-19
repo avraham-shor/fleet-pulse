@@ -128,6 +128,34 @@ describe('PresencePanel', () => {
     expect(sendViewing).toHaveBeenLastCalledWith(null)
   })
 
+  it('code-review patch: re-registering re-sends the current viewing selection, since server.js mints a fresh identity with viewingTruckId: null on every register', async () => {
+    const { store, PresencePanel, register, sendViewing } = await freshHarness()
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' })])
+
+    render(<PresencePanel />)
+    fireEvent.change(screen.getByLabelText('Viewing'), { target: { value: 'truck_1' } })
+    expect(sendViewing).toHaveBeenCalledWith('truck_1')
+
+    fireEvent.change(screen.getByLabelText('Your name'), { target: { value: 'Alice' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Register' }))
+
+    expect(register).toHaveBeenCalledWith('Alice')
+    // The already-selected truck survives the identity churn — sent again
+    // right after register(), not left to silently read as unset.
+    expect(sendViewing).toHaveBeenLastCalledWith('truck_1')
+  })
+
+  it('code-review patch: registering with no viewing selection made yet does not send a spurious sendViewing call', async () => {
+    const { PresencePanel, register, sendViewing } = await freshHarness()
+    render(<PresencePanel />)
+
+    fireEvent.change(screen.getByLabelText('Your name'), { target: { value: 'Alice' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Register' }))
+
+    expect(register).toHaveBeenCalledWith('Alice')
+    expect(sendViewing).not.toHaveBeenCalled()
+  })
+
   it('never crashes when the send facade has not been wired yet (a widget rendering before bootstrap runs)', async () => {
     vi.resetModules()
     const { resetWsSendFacadeForTests } = await import('../../../transport/ws-manager.ts')

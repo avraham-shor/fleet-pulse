@@ -365,6 +365,24 @@ describe('ws-manager', () => {
     expect(JSON.parse(instances[1]!.sent[0]!)).toEqual({ type: 'register_dispatcher', name: 'Dana' })
   })
 
+  it("code-review patch: register('') is a no-op — doesn't send an explicit empty name when open, and doesn't overwrite the durable current name for a future auto-register", () => {
+    const { manager, instances } = setup() // constructed with dispatcherName: 'Alice'
+    manager.connect()
+    instances[0]!.simulateOpen()
+    const sentBefore = instances[0]!.sent.length
+
+    manager.register('')
+    expect(instances[0]!.sent).toHaveLength(sentBefore) // nothing new sent
+
+    instances[0]!.simulateDrop()
+    vi.advanceTimersByTime(CLIENT_THRESHOLDS.RECONNECT_BACKOFF_INITIAL_MS)
+    expect(instances).toHaveLength(2)
+    instances[1]!.simulateOpen()
+    // The construction-time name survives — register('') never overwrote
+    // currentDispatcherName with an empty string.
+    expect(JSON.parse(instances[1]!.sent[0]!)).toEqual({ type: 'register_dispatcher', name: 'Alice' })
+  })
+
   it('close() tears the connection down for good — no further reconnect attempts', () => {
     const { manager, instances } = setup()
     manager.connect()

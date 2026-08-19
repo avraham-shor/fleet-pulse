@@ -73,7 +73,7 @@ context:
 **Acceptance Criteria:**
 - Given the app mounts, when the WS socket opens, then the dispatcher auto-registers and can (re-)identify via the presence widget without a reconnect. ✅ `bootstrap.ts` connects `wsManager` eagerly and auto-registers on open; `PresencePanel` re-registers the same socket under a chosen name via `getWsSendFacade().register()`.
 - Given a later widget or signal registers itself, when it does, then no existing widget file changes (AD-6). ✅ `FleetOverview.tsx` untouched; only a new widget module + one `App.tsx` import line.
-- Given `npm test`, when it runs, then the full suite (existing 138+ new) passes. ✅ 204/204 passing (66 new).
+- Given `npm test`, when it runs, then the full suite (existing 138+ new) passes. ✅ 207/207 passing (69 new, including 3 added by this story's code-review pass).
 
 ## Design Notes
 
@@ -127,14 +127,17 @@ context:
 - `register()` sends immediately if open, else just updates the name the next auto-register picks up — never dropped.
   [`ws-manager.ts:292`](../../../../src/transport/ws-manager.ts#L292)
 
+- Code-review patch: an empty name no longer produces a different wire shape depending on whether the socket happens to be open.
+  [`ws-manager.ts:301`](../../../../src/transport/ws-manager.ts#L301)
+
 - The narrow `{register, sendViewing}` shape — `ui/`'s only legal reach into transport.
-  [`ws-manager.ts:326`](../../../../src/transport/ws-manager.ts#L326)
+  [`ws-manager.ts:336`](../../../../src/transport/ws-manager.ts#L336)
 
 - `app/` push-sets the singleton once, right after constructing the real manager.
-  [`ws-manager.ts:340`](../../../../src/transport/ws-manager.ts#L340)
+  [`ws-manager.ts:350`](../../../../src/transport/ws-manager.ts#L350)
 
 - Widgets read it lazily; `null` before bootstrap wires it is a normal, handled state, not a crash.
-  [`ws-manager.ts:348`](../../../../src/transport/ws-manager.ts#L348)
+  [`ws-manager.ts:358`](../../../../src/transport/ws-manager.ts#L358)
 
 **Store: the third coalescing buffer**
 
@@ -152,14 +155,17 @@ context:
 - Own identity is local component state only, optimistic on submit — never written to the presence slice (AD-17).
   [`PresencePanel.tsx:60`](../../../../src/ui/widgets/presence/PresencePanel.tsx#L60)
 
+- Code-review patch: re-registering re-sends the current viewing selection, since a fresh identity otherwise reads as `viewingTruckId: null` to every peer.
+  [`PresencePanel.tsx:77`](../../../../src/ui/widgets/presence/PresencePanel.tsx#L77)
+
 - The viewing `<select>`'s explicit "None" maps to `sendViewing(null)` — FR-18's mandated clear, not an omission.
-  [`PresencePanel.tsx:71`](../../../../src/ui/widgets/presence/PresencePanel.tsx#L71)
+  [`PresencePanel.tsx:85`](../../../../src/ui/widgets/presence/PresencePanel.tsx#L85)
 
 - Subscribes to raw store records and derives sorted arrays via `useMemo`, avoiding the fresh-array-every-render trap.
-  [`PresencePanel.tsx:44`](../../../../src/ui/widgets/presence/PresencePanel.tsx#L44)
+  [`PresencePanel.tsx:42`](../../../../src/ui/widgets/presence/PresencePanel.tsx#L42)
 
 - One `registerWidget` call — the whole AD-6 contract for adding this widget.
-  [`PresencePanel.tsx:137`](../../../../src/ui/widgets/presence/PresencePanel.tsx#L137)
+  [`PresencePanel.tsx:148`](../../../../src/ui/widgets/presence/PresencePanel.tsx#L148)
 
 - The sole line touched to mount it — `FleetOverview.tsx` stays untouched (AD-6).
   [`App.tsx:14`](../../../../src/app/App.tsx#L14)
@@ -172,13 +178,13 @@ context:
 - End-to-end presence wiring through a fake `WebSocket`: register-before-open, reconnect rebuild, the staleness-tick sweep.
   [`bootstrap.test.ts`](../../../../src/app/bootstrap.test.ts)
 
-- `register()`'s three states (before-open, already-open, survives-reconnect) and the facade singleton.
+- `register()`'s three states (before-open, already-open, survives-reconnect), the facade singleton, and the code-review patch's `register('')` no-op guard.
   [`ws-manager.test.ts`](../../../../src/transport/ws-manager.test.ts)
 
 - The scheduler's third buffer coalescing alongside telemetry/obs in one commit.
   [`store.test.ts`](../../../../src/store/store.test.ts)
 
-- Widget-level render assertions, including the empty-facade and live-removal cases.
+- Widget-level render assertions, including the empty-facade, live-removal, and code-review patch's re-register-preserves-viewing cases.
   [`PresencePanel.test.tsx`](../../../../src/ui/widgets/presence/PresencePanel.test.tsx)
 
 - Proves the shell mounts the widget through its own side-effect import.

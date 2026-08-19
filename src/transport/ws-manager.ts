@@ -290,6 +290,16 @@ export function createWsManager(options: CreateWsManagerOptions): WsManager {
       current?.close()
     },
     register(name: string) {
+      // Guards against an empty name producing a wire message with an
+      // explicit empty `name` field when the socket happens to already be
+      // open, while the exact same call would instead fall back to an
+      // *anonymous* register_dispatcher (no `name` field at all) via the
+      // `onopen` ternary above if the socket weren't open yet — same
+      // input, different wire shape depending on unrelated timing. The
+      // current caller (`PresencePanel`) already trims and blocks empty
+      // submits, so this is defense-in-depth for the exported API's
+      // contract, not a behavior change for any path exercised today.
+      if (name === '') return
       currentDispatcherName = name
       if (socket && socket.readyState === WS_READY_STATE_OPEN) {
         const msg: ClientWsMessage = { type: 'register_dispatcher', name }

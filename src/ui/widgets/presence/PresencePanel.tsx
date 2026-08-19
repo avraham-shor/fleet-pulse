@@ -64,8 +64,19 @@ export function PresencePanel() {
     // Optimistic: the send-only facade is fire-and-forget (no ack this
     // widget waits on) — `registered` handling and any presence rebuild
     // flow through the store on their own via app/'s wiring.
-    getWsSendFacade()?.register(trimmed)
+    const facade = getWsSendFacade()
+    facade?.register(trimmed)
     setRegisteredAs(trimmed)
+    // server.js's handleRegister (Design Notes) always mints a fresh
+    // dispatcherId and a brand-new presence entry with viewingTruckId:
+    // null, even for a same-name re-register — so without this, every
+    // register submit would silently make this dispatcher's previously-
+    // visible "viewing truck_X" status vanish for every peer until the
+    // next manual selector change. Re-send it under the new identity so
+    // it survives, using only the existing {register, sendViewing} facade.
+    if (viewingSelection !== VIEWING_NONE) {
+      facade?.sendViewing(viewingSelection)
+    }
   }
 
   function handleViewingChange(event: ChangeEvent<HTMLSelectElement>) {
