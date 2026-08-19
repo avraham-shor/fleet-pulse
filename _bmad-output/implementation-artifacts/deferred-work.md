@@ -59,3 +59,12 @@
 - source_spec: `_bmad-output/specs/spec-Fleet-Pulse/stories/5-live-fleet-overview.md`
   summary: No `aria-live` regions anywhere in the new UI — the fleet-unavailable message and per-truck stale/trust-badge transitions are silent to screen readers.
   evidence: Real accessibility gap, but no accessibility requirement (WCAG, screen-reader support, etc.) exists anywhere in this project's FRs/NFRs or the architecture spine — out of this story's scope to invent one unprompted. Revisit if a later requirements pass adds an accessibility bar.
+
+## Deferred from: code review of story-1.6 (2026-08-19)
+
+- source_spec: `_bmad-output/specs/spec-Fleet-Pulse/stories/6-dispatcher-presence.md`
+  summary: There is a stale-`dispatcherId` race between calling `wsManager.register(name)` and the server's `registered` ack — `getDispatcherId()` keeps returning the pre-registration id until the ack lands, so any REST call made in that narrow window would carry a stale `X-Dispatcher-Id`.
+  evidence: Real given `bootstrap.ts` now wires `wsManager.getDispatcherId` live into `apiClient` (previously the permanent `() => null` stub), but unreachable today — the only current caller, `startInitialFleetFetch`, runs once at boot before any `register()` call exists. Worth resolving once story 1.7's mutation UI adds callers that fire after a rename/re-register.
+- source_spec: `_bmad-output/specs/spec-Fleet-Pulse/stories/6-dispatcher-presence.md`
+  summary: No `aria-live` region on the new `PresencePanel` widget — dispatchers joining/leaving or changing their viewed truck update the DOM with no screen-reader announcement.
+  evidence: Same accepted gap as story 1.5's identical finding — no accessibility requirement exists anywhere in this project's FRs/NFRs (NFR-8 covers only XSS-safe text-node rendering, not a11y), so inventing one here is out of scope. Revisit together if a later requirements pass adds an accessibility bar.

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { vi } from 'vitest'
 import { createCoalescingCommitScheduler, createFleetPulseStore } from './store.ts'
 import { selectSignalTelemetry } from './slices/telemetrySlice.ts'
+import { selectOtherDispatchers } from './slices/presenceSlice.ts'
 import type { PipelineCommit } from '../pipeline/index.ts'
 import { CLIENT_THRESHOLDS, SERVER_PARAMS } from '../../shared/constants.js'
 
@@ -103,5 +104,54 @@ describe('createCoalescingCommitScheduler', () => {
     scheduler.ingestAnomalies([])
     vi.advanceTimersByTime(10_000)
     expect(commitCount).toBe(0)
+  })
+
+  it("coalesces dispatcher_viewing churn through the scheduler's third pending buffer, merged into the same set() as telemetry/obs", () => {
+    const store = createFleetPulseStore()
+    const scheduler = createCoalescingCommitScheduler(store)
+    store.getState().dispatcherJoined('dispatcher_1', 'Alice', 0)
+
+    let commitCount = 0
+    store.subscribe(() => {
+      commitCount += 1
+    })
+
+    // A burst of viewing updates for the same dispatcher, plus one
+    // unrelated pipeline commit and one anomaly, all enqueued before the
+    // flush timer fires — everything must land in exactly one set() call.
+    scheduler.ingestPresenceViewing({ dispatcherId: 'dispatcher_1', truckId: 'truck_1', now: 10 })
+    scheduler.ingestPresenceViewing({ dispatcherId: 'dispatcher_1', truckId: 'truck_2', now: 20 })
+    scheduler.ingestPresenceViewing({ dispatcherId: 'dispatcher_1', truckId: null, now: 30 }) // explicit clear, FR-18
+    scheduler.ingestPipelineCommit({
+      truckId: 'truck_1',
+      signals: [{ signal: 'speed', live: { value: 50, trust: 'trusted', readingTs: 0, arrivalTs: 0 }, historyEntries: [] }],
+    })
+    scheduler.ingestAnomalies([{ ruleId: 'speed-sensor-fault', truckId: 'truck_1', rawValue: 999, readingTs: 0, arrivalTs: 0 }])
+
+    vi.advanceTimersByTime(1_000 / CLIENT_THRESHOLDS.RENDER_COALESCE_MAX_COMMITS_PER_SEC)
+
+    expect(commitCount).toBe(1) // one coalesced commit spans all three buffers
+    const dispatcher = selectOtherDispatchers(store.getState()).find((d) => d.dispatcherId === 'dispatcher_1')
+    // The last-enqueued viewing update in the burst wins — the explicit
+    // clear (truckId: null, FR-18) — not the first or an intermediate one.
+    expect(dispatcher?.viewingTruckId).toBeNull()
+    expect(dispatcher?.lastSeenAt).toBe(30)
+    expect(selectSignalTelemetry(store.getState(), 'truck_1', 'speed')?.latest?.value).toBe(50)
+    expect(store.getState().obs.anomalyLog.toArray()).toHaveLength(1)
+  })
+
+  it('a viewing update for an unknown/already-removed dispatcherId is dropped through the scheduler too (FR-19) — no phantom entry, other buffers still flush', () => {
+    const store = createFleetPulseStore()
+    const scheduler = createCoalescingCommitScheduler(store)
+    let commitCount = 0
+    store.subscribe(() => {
+      commitCount += 1
+    })
+
+    scheduler.ingestPresenceViewing({ dispatcherId: 'dispatcher_ghost', truckId: 'truck_1', now: 10 })
+    vi.advanceTimersByTime(1_000 / CLIENT_THRESHOLDS.RENDER_COALESCE_MAX_COMMITS_PER_SEC)
+
+    expect(commitCount).toBe(1) // still flushed (a non-empty buffer schedules the flush) — just no presence write survives it
+    expect(selectOtherDispatchers(store.getState())).toHaveLength(0)
   })
 })

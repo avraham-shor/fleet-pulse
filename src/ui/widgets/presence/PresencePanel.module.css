@@ -1,0 +1,79 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.registerRow,
+.viewingRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.label {
+  font-size: 13px;
+  color: var(--text, #6b6375);
+}
+
+.input,
+.select {
+  font: inherit;
+  padding: 4px 8px;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 6px;
+  background: var(--bg, #fff);
+  color: inherit;
+}
+
+.button {
+  font: inherit;
+  padding: 4px 12px;
+  border: 1px solid var(--accent, #aa3bff);
+  border-radius: 6px;
+  background: var(--accent, #aa3bff);
+  color: #fff;
+  cursor: pointer;
+}
+
+.status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text, #6b6375);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.empty {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--text, #6b6375);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.name {
+  font-weight: 600;
+}
+
+.viewing {
+  color: var(--text, #6b6375);
+  font-size: 13px;
+}

@@ -1,14 +1,16 @@
 // FleetPulse — composition-root bootstrap tests (AD-1)
 //
-// Node environment (no DOM needed) — mocks the two browser globals this
-// module's defaults reach for (`fetch`, `EventSource`; Node has no global
-// `EventSource` at all — confirmed empirically, not assumed) and vitest's
-// fake timers so the staleness interval never leaks a real repeating timer
-// across tests. Each test resets Vitest's module registry so
-// `bootstrap.ts`'s own module-scoped singleton (and the store singleton it
-// wires) start fresh — `bootstrap.ts` intentionally has no per-instance
-// constructor, only a memoized accessor, so isolating tests means
-// isolating the module graph.
+// Node environment (no DOM needed) — mocks the three browser globals this
+// module's defaults reach for (`fetch`, `EventSource`, `WebSocket`; Node
+// has no global `EventSource` at all — confirmed empirically, not assumed;
+// Node 24 does ship a global `WebSocket`, but its real implementation
+// rejects the manager's relative `/ws` URL, so it's stubbed the same way)
+// and vitest's fake timers so the staleness interval never leaks a real
+// repeating timer across tests. Each test resets Vitest's module registry
+// so `bootstrap.ts`'s own module-scoped singleton (and the store/ws-manager
+// singletons it wires) start fresh — `bootstrap.ts` intentionally has no
+// per-instance constructor, only a memoized accessor, so isolating tests
+// means isolating the module graph.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Truck } from '../contract/rest.ts'
@@ -29,6 +31,49 @@ class FakeEventSource {
   close() {
     // no-op — nothing in these tests exercises reconnect/close behavior,
     // that's sse-manager.test.ts's job.
+  }
+}
+
+const WS_OPEN = 1
+const WS_CLOSED = 3
+
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = []
+  url: string
+  readyState = 0
+  sent: string[] = []
+  onopen: (() => void) | null = null
+  onclose: (() => void) | null = null
+  onerror: (() => void) | null = null
+  onmessage: ((event: { data: unknown }) => void) | null = null
+
+  constructor(url: string) {
+    this.url = url
+    FakeWebSocket.instances.push(this)
+  }
+
+  send(data: string) {
+    this.sent.push(data)
+  }
+
+  close() {
+    if (this.readyState === WS_CLOSED) return
+    this.readyState = WS_CLOSED
+    this.onclose?.()
+  }
+
+  // --- test helpers, not part of the real WebSocket API ------------------
+  simulateOpen() {
+    this.readyState = WS_OPEN
+    this.onopen?.()
+  }
+
+  simulateServerMessage(msg: unknown) {
+    this.onmessage?.({ data: JSON.stringify(msg) })
+  }
+
+  simulateDrop() {
+    this.close()
   }
 }
 
@@ -60,7 +105,9 @@ function makeResponse(status: number, body: unknown): Response {
 beforeEach(() => {
   vi.useFakeTimers()
   FakeEventSource.instances = []
+  FakeWebSocket.instances = []
   vi.stubGlobal('EventSource', FakeEventSource)
+  vi.stubGlobal('WebSocket', FakeWebSocket)
 })
 
 afterEach(() => {
@@ -72,6 +119,18 @@ afterEach(() => {
 async function freshBootstrapModule() {
   vi.resetModules()
   return import('./bootstrap.ts')
+}
+
+/** Same fresh-module-graph reset as `freshBootstrapModule()`, but also
+ * hands back `transport/ws-manager.ts`'s exports from the *same* graph —
+ * needed to reach `getWsSendFacade()` and prove it's wired to the exact
+ * `wsManager` instance `bootstrap.ts` constructed (not some unrelated
+ * fresh instance from a second, independent `import()`). */
+async function freshBootstrapWithWs() {
+  vi.resetModules()
+  const bootstrapModule = await import('./bootstrap.ts')
+  const wsManagerModule = await import('../transport/ws-manager.ts')
+  return { ...bootstrapModule, ...wsManagerModule }
 }
 
 describe('getBootstrap', () => {
@@ -113,5 +172,104 @@ describe('getBootstrap', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(store.getState().fleet.fetchStatus).toBe('error')
+  })
+})
+
+describe('getBootstrap: presence wiring (FR-16..19, AD-8)', () => {
+  it('connects the WS socket eagerly, no blocking gate — mirrors sseManager.connect()', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+    const { getBootstrap } = await freshBootstrapWithWs()
+    getBootstrap()
+    expect(FakeWebSocket.instances).toHaveLength(1)
+  })
+
+  it('FR-16: auto-registers on open with no name, and getWsSendFacade().register() re-registers the already-open socket under the chosen name', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+    const { getBootstrap, getWsSendFacade } = await freshBootstrapWithWs()
+    getBootstrap()
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    expect(JSON.parse(FakeWebSocket.instances[0]!.sent[0]!)).toEqual({ type: 'register_dispatcher' })
+
+    getWsSendFacade()!.register('Alice')
+    const sent = FakeWebSocket.instances[0]!.sent.map((raw) => JSON.parse(raw))
+    expect(sent).toContainEqual({ type: 'register_dispatcher', name: 'Alice' })
+  })
+
+  it('wires dispatcher_joined/_left directly into the presence slice', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'dispatcher_joined', dispatcherId: 'dispatcher_1', name: 'Alice' })
+    expect(store.getState().presence.dispatchers['dispatcher_1']?.name).toBe('Alice')
+
+    FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'dispatcher_left', dispatcherId: 'dispatcher_1' })
+    expect(store.getState().presence.dispatchers['dispatcher_1']).toBeUndefined()
+  })
+
+  it("wires dispatcher_viewing through the coalescing scheduler, not a direct commit", async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'dispatcher_joined', dispatcherId: 'dispatcher_1', name: 'Alice' })
+    FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'dispatcher_viewing', dispatcherId: 'dispatcher_1', truckId: 'truck_5' })
+
+    // Not applied yet — dispatcher_viewing rides the same coalescing
+    // scheduler as pipeline commits (AD-5), it doesn't commit synchronously.
+    expect(store.getState().presence.dispatchers['dispatcher_1']?.viewingTruckId).toBeNull()
+
+    await vi.advanceTimersByTimeAsync(1_000 / CLIENT_THRESHOLDS.RENDER_COALESCE_MAX_COMMITS_PER_SEC)
+    expect(store.getState().presence.dispatchers['dispatcher_1']?.viewingTruckId).toBe('truck_5')
+  })
+
+  it('AD-8: onConnect resets presence before the server replay rebuilds it — a reconnect leaves no stale peer behind', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'dispatcher_joined', dispatcherId: 'dispatcher_stale', name: 'StalePeer' })
+    expect(Object.keys(store.getState().presence.dispatchers)).toEqual(['dispatcher_stale'])
+
+    FakeWebSocket.instances[0]!.simulateDrop()
+    await vi.advanceTimersByTimeAsync(CLIENT_THRESHOLDS.RECONNECT_BACKOFF_INITIAL_MS)
+    expect(FakeWebSocket.instances).toHaveLength(2)
+
+    FakeWebSocket.instances[1]!.simulateOpen() // fires onConnect -> resetPresence()
+    expect(store.getState().presence.dispatchers).toEqual({})
+
+    // The server's replay-on-register rebuild: only the still-present peer
+    // comes back — the stale one from before the drop never reappears on
+    // its own.
+    FakeWebSocket.instances[1]!.simulateServerMessage({ type: 'dispatcher_joined', dispatcherId: 'dispatcher_live', name: 'LivePeer' })
+    expect(Object.keys(store.getState().presence.dispatchers)).toEqual(['dispatcher_live'])
+  })
+
+  it('FR-19: sweeps a stale presence entry on the same staleness tick that drives the effective-trust selector', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'dispatcher_joined', dispatcherId: 'dispatcher_1', name: 'Alice' })
+    expect(store.getState().presence.dispatchers['dispatcher_1']).toBeDefined()
+
+    await vi.advanceTimersByTimeAsync(CLIENT_THRESHOLDS.PRESENCE_LIVENESS_TIMEOUT_MS + CLIENT_THRESHOLDS.STALENESS_TICK_MS)
+
+    expect(store.getState().presence.dispatchers['dispatcher_1']).toBeUndefined()
+  })
+
+  it('FR-33: an unhandled recognized WS message type (e.g. fleet_reset) is safely ignored by this wiring, never a crash', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    expect(() => FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'fleet_reset' })).not.toThrow()
+    expect(store.getState().presence.dispatchers).toEqual({})
   })
 })

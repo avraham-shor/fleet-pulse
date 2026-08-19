@@ -11,10 +11,10 @@
 // the `useEffect` (bootstrap never fires — the app is stuck on "Loading
 // fleet…" forever) would both ship with every other test file still green.
 //
-// Mocks the same two browser globals `bootstrap.test.ts` does (`fetch`,
-// `EventSource`; Node has no global `EventSource`) and resets Vitest's
-// module registry per test so the module-scoped store/registry singletons
-// this story wires together all start fresh.
+// Mocks the same browser globals `bootstrap.test.ts` does (`fetch`,
+// `EventSource`, `WebSocket`) and resets Vitest's module registry per test
+// so the module-scoped store/registry singletons this story wires together
+// all start fresh.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
@@ -34,6 +34,30 @@ class FakeEventSource {
 
   close() {
     // no-op — reconnect/close behavior is sse-manager.test.ts's job.
+  }
+}
+
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = []
+  url: string
+  readyState = 0
+  sent: string[] = []
+  onopen: (() => void) | null = null
+  onclose: (() => void) | null = null
+  onerror: (() => void) | null = null
+  onmessage: ((event: { data: unknown }) => void) | null = null
+
+  constructor(url: string) {
+    this.url = url
+    FakeWebSocket.instances.push(this)
+  }
+
+  send(data: string) {
+    this.sent.push(data)
+  }
+
+  close() {
+    // no-op — reconnect/close behavior is ws-manager.test.ts's job.
   }
 }
 
@@ -65,7 +89,9 @@ function makeResponse(status: number, body: unknown): Response {
 beforeEach(() => {
   vi.useFakeTimers()
   FakeEventSource.instances = []
+  FakeWebSocket.instances = []
   vi.stubGlobal('EventSource', FakeEventSource)
+  vi.stubGlobal('WebSocket', FakeWebSocket)
 })
 
 afterEach(() => {
@@ -101,8 +127,11 @@ describe('App', () => {
     // Proves the side-effect import really did register FleetOverview:
     // its post-fetch content (the roster + the SVG grid) is now present
     // inside the shell, not just in a test that renders it directly.
-    expect(screen.getByText('truck_1')).toBeTruthy()
-    expect(screen.getByText('truck_2')).toBeTruthy()
+    // Scoped to `span` (FleetOverview's roster row markup): the presence
+    // widget's own viewing-selector also renders each truck id, as an
+    // `<option>`, in the same shell — this disambiguates the two.
+    expect(screen.getByText('truck_1', { selector: 'span' })).toBeTruthy()
+    expect(screen.getByText('truck_2', { selector: 'span' })).toBeTruthy()
     expect(screen.getByRole('img', { name: 'Fleet position grid' })).toBeTruthy()
   })
 
@@ -115,5 +144,17 @@ describe('App', () => {
     rerender(<App />)
 
     expect(screen.getByRole('alert').textContent).toContain('unavailable')
+  })
+
+  it('AD-6: the presence widget mounts through the shell via its own side-effect import — no edit to FleetOverview needed', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+
+    const App = await freshApp()
+    render(<App />)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(screen.getByLabelText('Your name')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Register' })).toBeTruthy()
+    expect(screen.getByText('No other dispatchers active')).toBeTruthy()
   })
 })

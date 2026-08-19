@@ -6,7 +6,7 @@
 // driven entirely by vitest's fake timers rather than a real socket.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createWsManager } from './ws-manager.ts'
+import { createWsManager, getWsSendFacade, resetWsSendFacadeForTests, setWsSendFacade } from './ws-manager.ts'
 import type { WebSocketLike } from './ws-manager.ts'
 import { CLIENT_THRESHOLDS } from '../../shared/constants.js'
 
@@ -328,6 +328,43 @@ describe('ws-manager', () => {
     expect(sent).toContainEqual({ type: 'viewing_truck', truckId: null })
   })
 
+  it('register(): before the socket opens, just updates the mutable current name — the pending auto-register-on-open send picks it up, never silently dropped', () => {
+    const { manager, instances } = setup()
+    manager.connect()
+    expect(instances[0]!.readyState).toBe(0) // still CONNECTING
+
+    manager.register('Bob') // no socket to send on yet
+    expect(instances[0]!.sent).toHaveLength(0) // nothing sent while not open
+
+    instances[0]!.simulateOpen()
+    expect(instances[0]!.sent).toHaveLength(1)
+    expect(JSON.parse(instances[0]!.sent[0]!)).toEqual({ type: 'register_dispatcher', name: 'Bob' })
+  })
+
+  it('register(): on an already-open socket, sends register_dispatcher immediately with the new name', () => {
+    const { manager, instances } = setup()
+    manager.connect()
+    instances[0]!.simulateOpen()
+    const sentBefore = instances[0]!.sent.length
+
+    manager.register('Carol')
+    const sentAfter = instances[0]!.sent.slice(sentBefore).map((raw) => JSON.parse(raw))
+    expect(sentAfter).toContainEqual({ type: 'register_dispatcher', name: 'Carol' })
+  })
+
+  it('register(): a name set before open (or via a prior register()) survives a later reconnect — the mutable current name, not the construction-time default, drives every future auto-register', () => {
+    const { manager, instances } = setup() // constructed with dispatcherName: 'Alice'
+    manager.connect()
+    instances[0]!.simulateOpen()
+    manager.register('Dana')
+
+    instances[0]!.simulateDrop()
+    vi.advanceTimersByTime(CLIENT_THRESHOLDS.RECONNECT_BACKOFF_INITIAL_MS)
+    expect(instances).toHaveLength(2)
+    instances[1]!.simulateOpen()
+    expect(JSON.parse(instances[1]!.sent[0]!)).toEqual({ type: 'register_dispatcher', name: 'Dana' })
+  })
+
   it('close() tears the connection down for good — no further reconnect attempts', () => {
     const { manager, instances } = setup()
     manager.connect()
@@ -338,5 +375,44 @@ describe('ws-manager', () => {
     vi.advanceTimersByTime(CLIENT_THRESHOLDS.RECONNECT_BACKOFF_MAX_MS * 4)
     expect(instances).toHaveLength(1)
     expect(manager.getDispatcherId()).toBeNull()
+  })
+})
+
+describe('getWsSendFacade / setWsSendFacade', () => {
+  afterEach(() => {
+    resetWsSendFacadeForTests()
+  })
+
+  it('returns null before app/ has wired anything in (a widget rendering before bootstrap runs never crashes)', () => {
+    expect(getWsSendFacade()).toBeNull()
+  })
+
+  it('returns exactly what was set, narrowed to {register, sendViewing} — the widened AD-1 facade', () => {
+    const register = vi.fn()
+    const sendViewing = vi.fn()
+    setWsSendFacade({ register, sendViewing })
+
+    const facade = getWsSendFacade()
+    expect(facade).not.toBeNull()
+    facade!.register('Alice')
+    facade!.sendViewing('truck_1')
+    expect(register).toHaveBeenCalledWith('Alice')
+    expect(sendViewing).toHaveBeenCalledWith('truck_1')
+  })
+
+  it('a real WsManager satisfies the facade shape — register/sendViewing work when set directly from createWsManager()', () => {
+    vi.useFakeTimers()
+    const { manager, instances } = setup()
+    manager.connect()
+    instances[0]!.simulateOpen()
+    setWsSendFacade({ register: manager.register, sendViewing: manager.sendViewing })
+
+    getWsSendFacade()!.register('Eve')
+    getWsSendFacade()!.sendViewing('truck_2')
+
+    const sent = instances[0]!.sent.map((raw) => JSON.parse(raw))
+    expect(sent).toContainEqual({ type: 'register_dispatcher', name: 'Eve' })
+    expect(sent).toContainEqual({ type: 'viewing_truck', truckId: 'truck_2' })
+    vi.useRealTimers()
   })
 })

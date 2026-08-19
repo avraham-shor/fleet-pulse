@@ -60,7 +60,9 @@ export interface CreateWsManagerOptions {
    * rule); defaults to `/ws`. */
   url?: string
   /** Sent with every `register_dispatcher`, including on reconnect — a
-   * reconnect always gets a fresh identity (FR-16). */
+   * reconnect always gets a fresh identity (FR-16). This is only the
+   * *initial* name: `register(name)` below updates the mutable current
+   * name every subsequent `register_dispatcher` (auto or manual) sends. */
   dispatcherName?: string
   /** Every recognized server->client message except `registered` and
    * `pong` — both consumed internally (AD-17 identity, keepalive plumbing)
@@ -92,6 +94,15 @@ export interface WsManager {
   /** Tears the connection down for good: cancels any pending reconnect and
    * the keepalive ping, and does not reconnect afterward. */
   close(): void
+  /** Sets the mutable current dispatcher name and (re-)registers this
+   * socket under it: sent immediately if the socket is already open —
+   * reusing `server.js`'s existing re-registration handling
+   * (`handleRegister`, `server.js:721-733`), which always issues a fresh
+   * `dispatcherId` even for an already-registered socket (Design Notes) —
+   * or, while the socket isn't open yet, just updates the name that the
+   * next `onopen`'s auto-register-on-open send picks up. Never silently
+   * dropped either way (AD-1's widened facade). */
+  register(name: string): void
   /** The typed send-only facade `ui/` is allowed to call directly (AD-1).
    * A no-op while the socket isn't open — there is nothing useful to queue
    * a stale viewing-truck update behind. */
@@ -126,6 +137,12 @@ export function createWsManager(options: CreateWsManagerOptions): WsManager {
 
   let socket: WebSocketLike | null = null
   let dispatcherId: string | null = null
+  // The mutable current name `register()` updates — replaces the old fixed
+  // read of `options.dispatcherName`, which only ever reflected the name
+  // passed at construction. `options.dispatcherName` seeds it; every call
+  // to `register()` after that overwrites it for every subsequent send
+  // (including a later reconnect's own auto-register-on-open).
+  let currentDispatcherName: string | undefined = options.dispatcherName
   let droppedMessageCount = 0
   let reconnectCount = 0
   let lastPingSentAtMs: number | null = null
@@ -227,8 +244,8 @@ export function createWsManager(options: CreateWsManagerOptions): WsManager {
     mySocket.onopen = () => {
       if (socket !== mySocket) return // stale callback from a superseded socket
       currentBackoffMs = CLIENT_THRESHOLDS.RECONNECT_BACKOFF_INITIAL_MS
-      const register: ClientWsMessage = options.dispatcherName
-        ? { type: 'register_dispatcher', name: options.dispatcherName }
+      const register: ClientWsMessage = currentDispatcherName
+        ? { type: 'register_dispatcher', name: currentDispatcherName }
         : { type: 'register_dispatcher' }
       mySocket.send(JSON.stringify(register))
       startPing()
@@ -272,6 +289,17 @@ export function createWsManager(options: CreateWsManagerOptions): WsManager {
       socket = null
       current?.close()
     },
+    register(name: string) {
+      currentDispatcherName = name
+      if (socket && socket.readyState === WS_READY_STATE_OPEN) {
+        const msg: ClientWsMessage = { type: 'register_dispatcher', name }
+        socket.send(JSON.stringify(msg))
+      }
+      // Else: nothing to send yet — the name is durably held in
+      // `currentDispatcherName`, so whichever `onopen` fires next (the
+      // in-flight initial connect, or a future reconnect) auto-registers
+      // under it. Never silently dropped.
+    },
     sendViewing(truckId: string | null) {
       if (!socket || socket.readyState !== WS_READY_STATE_OPEN) return
       const msg: ClientWsMessage = { type: 'viewing_truck', truckId }
@@ -290,4 +318,39 @@ export function createWsManager(options: CreateWsManagerOptions): WsManager {
       return reconnectCount
     },
   }
+}
+
+/** The narrow send-only shape `ui/` is allowed to reach transport with —
+ * this story's widened AD-1 facade (register + sendViewing only, never
+ * `connect`/`close`/the getters). */
+export interface WsSendFacade {
+  register(name: string): void
+  sendViewing(truckId: string | null): void
+}
+
+let wsSendFacade: WsSendFacade | null = null
+
+/** Registration seam for `app/`'s composition root (mirrors `store.ts`'s
+ * `getFleetPulseStore` singleton pattern, but push-set rather than
+ * lazily-constructed here: unlike the store, a `WsManager` needs injected
+ * `onMessage`/`onConnect` handlers at construction, so `app/` builds the
+ * real one and hands it in — this module never constructs it itself).
+ * `app/` calls this exactly once, right after constructing the production
+ * `wsManager`. */
+export function setWsSendFacade(facade: WsSendFacade): void {
+  wsSendFacade = facade
+}
+
+/** `ui/`'s only legal way to reach `transport/ws-manager` (AD-1). Returns
+ * `null` before `app/`'s composition root has wired the production
+ * manager in yet (e.g. a widget rendering before `getBootstrap()` runs) —
+ * callers treat that as "nothing to send yet," never a crash. */
+export function getWsSendFacade(): WsSendFacade | null {
+  return wsSendFacade
+}
+
+/** Test-only: clears the singleton so each test starts from a clean slate.
+ * Production code never calls this. */
+export function resetWsSendFacadeForTests(): void {
+  wsSendFacade = null
 }

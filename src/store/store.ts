@@ -17,10 +17,11 @@ import { createTelemetrySlice, applyTelemetryCommitsPure, type TelemetrySlice } 
 import { createObsSlice, pushAnomaliesPure, type ObsSlice } from './slices/obsSlice.ts'
 import { createHealthSlice, type HealthSlice } from './slices/healthSlice.ts'
 import { createFleetSlice, type FleetSlice } from './slices/fleetSlice.ts'
+import { createPresenceSlice, applyPresenceViewingPure, type PresenceSlice, type PresenceViewingUpdate } from './slices/presenceSlice.ts'
 import type { PipelineCommit } from '../pipeline/index.ts'
 import type { AnomalyEntry } from '../pipeline/types.ts'
 
-export type FleetPulseStore = TelemetrySlice & ObsSlice & HealthSlice & FleetSlice
+export type FleetPulseStore = TelemetrySlice & ObsSlice & HealthSlice & FleetSlice & PresenceSlice
 
 /** The store factory. Tests call this directly for per-test isolation
  * (a fresh, unshared instance every time). Production code should not call
@@ -33,6 +34,7 @@ export function createFleetPulseStore(): UseBoundStore<StoreApi<FleetPulseStore>
     ...createObsSlice(...args),
     ...createHealthSlice(...args),
     ...createFleetSlice(...args),
+    ...createPresenceSlice(...args),
   }))
 }
 
@@ -60,6 +62,10 @@ export interface CoalescingCommitScheduler {
   ingestPipelineCommit(commit: PipelineCommit): void
   /** Enqueues a batch of anomaly entries; no-op for an empty array. */
   ingestAnomalies(entries: AnomalyEntry[]): void
+  /** Enqueues one `dispatcher_viewing` update — the third pending buffer
+   * (Boundaries & Constraints), merged into the same flush as pipeline
+   * commits and anomalies via `applyPresenceViewingPure`. */
+  ingestPresenceViewing(update: PresenceViewingUpdate): void
   /** Test-only: flushes immediately, bypassing the scheduled timer. */
   flushNow(): void
 }
@@ -89,18 +95,22 @@ export function createCoalescingCommitScheduler(
 
   let pendingCommits: PipelineCommit[] = []
   let pendingAnomalies: AnomalyEntry[] = []
+  let pendingViewingUpdates: PresenceViewingUpdate[] = []
   let flushTimer: ReturnType<typeof setTimeout> | null = null
 
   function flush(): void {
     flushTimer = null
-    if (pendingCommits.length === 0 && pendingAnomalies.length === 0) return
+    if (pendingCommits.length === 0 && pendingAnomalies.length === 0 && pendingViewingUpdates.length === 0) return
     const commits = pendingCommits
     const anomalies = pendingAnomalies
+    const viewingUpdates = pendingViewingUpdates
     pendingCommits = []
     pendingAnomalies = []
+    pendingViewingUpdates = []
     store.setState((state) => ({
       telemetry: applyTelemetryCommitsPure(state.telemetry, commits),
       obs: pushAnomaliesPure(state.obs, anomalies),
+      presence: applyPresenceViewingPure(state.presence, viewingUpdates),
     }))
   }
 
@@ -117,6 +127,10 @@ export function createCoalescingCommitScheduler(
     ingestAnomalies(entries) {
       if (entries.length === 0) return
       pendingAnomalies.push(...entries)
+      scheduleFlush()
+    },
+    ingestPresenceViewing(update) {
+      pendingViewingUpdates.push(update)
       scheduleFlush()
     },
     flushNow() {
