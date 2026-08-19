@@ -63,6 +63,16 @@ function makeResponse(status: number, body: unknown): Response {
   } as unknown as Response
 }
 
+function makeConflictBody(overrides: Partial<ConflictErrorBody> = {}): ConflictErrorBody {
+  return {
+    error: 'version_conflict',
+    message: 'stale',
+    conflictingDispatcher: { dispatcherId: 'dispatcher_system', name: 'System' },
+    currentRoute: makeRoute({ version: 5 }),
+    ...overrides,
+  }
+}
+
 async function freshHarness(options: { fetchImpl?: ReturnType<typeof vi.fn>; dispatcherId?: string | null } = {}) {
   vi.resetModules()
   if (options.fetchImpl) vi.stubGlobal('fetch', options.fetchImpl)
@@ -288,14 +298,8 @@ describe('RoutesPanel — cancel and reassign require confirmation (FR-14, NFR-6
     expect((within(row).getByLabelText('Reassign route_1 to') as HTMLSelectElement).value).toBe('')
   })
 
-  it('FR-13: a 409 conflict surfaces a visible error naming the conflicting dispatcher, no chooser', async () => {
-    const conflictBody: ConflictErrorBody = {
-      error: 'version_conflict',
-      message: 'stale',
-      conflictingDispatcher: { dispatcherId: 'dispatcher_system', name: 'System' },
-      currentRoute: makeRoute({ version: 5 }),
-    }
-    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(409, conflictBody))
+  it('FR-13: a 409 on cancel renders the shared ConflictChooser naming the conflicting dispatcher and both versions', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(409, makeConflictBody()))
     const { store, RoutesPanel } = await freshHarness({ fetchImpl })
     store.getState().setFleet([makeTruck({ truckId: 'truck_1' })])
     store.getState().applyRouteAssigned(makeRoute({ status: 'assigned', version: 1 }))
@@ -307,8 +311,313 @@ describe('RoutesPanel — cancel and reassign require confirmation (FR-14, NFR-6
       fireEvent.click(within(row).getByRole('button', { name: 'Confirm cancel' }))
     })
 
-    expect(within(row).getByRole('alert').textContent).toContain('System')
-    expect(screen.queryByText(/side-by-side/i)).toBeNull() // no chooser — story 8's concern
+    const chooser = within(row).getByTestId('conflict-chooser')
+    expect(chooser.textContent).toContain('System') // conflictingDispatcher.name
+    expect(chooser.textContent).toContain('version 5') // currentRoute.version
+    expect(chooser.textContent).toContain('Cancel') // myIntentLabel
+    // The plain "reload and retry" error text is gone — the chooser replaced it.
+    expect(within(row).queryByText(/Reload and retry/i)).toBeNull()
+  })
+})
+
+describe('RoutesPanel — FR-13: transition/cancel and reassign reach the exact same ConflictChooser', () => {
+  it('a 409 on a non-destructive transition (no arm step, e.g. "Start (in progress)") also renders the shared ConflictChooser', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(409, makeConflictBody()))
+    const { store, RoutesPanel } = await freshHarness({ fetchImpl })
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' })])
+    store.getState().applyRouteAssigned(makeRoute({ status: 'assigned', version: 1 }))
+
+    render(<RoutesPanel />)
+    const row = screen.getByTestId('route-row-route_1')
+    await act(async () => {
+      fireEvent.click(within(row).getByRole('button', { name: 'Start (in progress)' }))
+    })
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    const chooser = within(row).getByTestId('conflict-chooser')
+    expect(chooser.textContent).toContain('System')
+    expect(chooser.textContent).toContain('Start (in progress)') // myIntentLabel
+  })
+
+  it('a 409 on reassign renders the same shared ConflictChooser component transition/cancel uses', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(409, makeConflictBody()))
+    const { store, RoutesPanel } = await freshHarness({ fetchImpl })
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' }), makeTruck({ truckId: 'truck_2' })])
+    store.getState().applyRouteAssigned(makeRoute({ status: 'assigned', version: 1, truckId: 'truck_1' }))
+
+    render(<RoutesPanel />)
+    const row = screen.getByTestId('route-row-route_1')
+    const reassignSelect = within(row).getByLabelText('Reassign route_1 to')
+    fireEvent.change(reassignSelect, { target: { value: 'truck_2' } })
+    fireEvent.click(within(row).getByRole('button', { name: 'Reassign' }))
+    expect(fetchImpl).not.toHaveBeenCalled() // armed only
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole('button', { name: 'Confirm reassign' }))
+    })
+
+    const chooser = within(row).getByTestId('conflict-chooser')
+    expect(chooser.textContent).toContain('System')
+    expect(chooser.textContent).toContain('version 5')
+    expect(chooser.textContent).toContain('Reassign to truck_2') // myIntentLabel
+  })
+
+  it('Adopt clears the armed/failure state and sends no further request', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(409, makeConflictBody()))
+    const { store, RoutesPanel } = await freshHarness({ fetchImpl })
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' })])
+    store.getState().applyRouteAssigned(makeRoute({ status: 'assigned', version: 1 }))
+
+    render(<RoutesPanel />)
+    const row = screen.getByTestId('route-row-route_1')
+    fireEvent.click(within(row).getByRole('button', { name: 'Cancel' }))
+    await act(async () => {
+      fireEvent.click(within(row).getByRole('button', { name: 'Confirm cancel' }))
+    })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(within(row).getByRole('button', { name: 'Use their version' }))
+
+    expect(within(row).queryByTestId('conflict-chooser')).toBeNull()
+    expect(fetchImpl).toHaveBeenCalledTimes(1) // Adopt sends no request
+    // Back to the row's normal controls, ready to arm again.
+    expect(within(row).getByRole('button', { name: 'Cancel' })).toBeTruthy()
+  })
+
+  it('Back out clears the armed/failure state and sends no further request', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(409, makeConflictBody()))
+    const { store, RoutesPanel } = await freshHarness({ fetchImpl })
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' })])
+    store.getState().applyRouteAssigned(makeRoute({ status: 'assigned', version: 1 }))
+
+    render(<RoutesPanel />)
+    const row = screen.getByTestId('route-row-route_1')
+    fireEvent.click(within(row).getByRole('button', { name: 'Cancel' }))
+    await act(async () => {
+      fireEvent.click(within(row).getByRole('button', { name: 'Confirm cancel' }))
+    })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(within(row).getByRole('button', { name: 'Never mind' }))
+
+    expect(within(row).queryByTestId('conflict-chooser')).toBeNull()
+    expect(fetchImpl).toHaveBeenCalledTimes(1) // Back out sends no request
+  })
+
+  it("Re-apply resubmits the same intended mutation with If-Match set to the failure body's currentRoute.version", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(makeResponse(409, makeConflictBody({ currentRoute: makeRoute({ version: 7 }) })))
+      .mockResolvedValueOnce(makeResponse(200, makeRoute({ status: 'cancelled', version: 8 })))
+    const { store, RoutesPanel } = await freshHarness({ fetchImpl })
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' })])
+    store.getState().applyRouteAssigned(makeRoute({ status: 'assigned', version: 1 }))
+
+    render(<RoutesPanel />)
+    const row = screen.getByTestId('route-row-route_1')
+    fireEvent.click(within(row).getByRole('button', { name: 'Cancel' }))
+    await act(async () => {
+      fireEvent.click(within(row).getByRole('button', { name: 'Confirm cancel' }))
+    })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    // First attempt used the version known at arm-time (1).
+    const [, firstInit] = fetchImpl.mock.calls[0]!
+    expect((firstInit.headers as Record<string, string>)['If-Match']).toBe('1')
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole('button', { name: 'Re-apply' }))
+    })
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    const [url, init] = fetchImpl.mock.calls[1]!
+    expect(url).toBe('/api/routes/route_1')
+    expect((init as RequestInit).method).toBe('PATCH')
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ status: 'cancelled' })
+    expect((init.headers as Record<string, string>)['If-Match']).toBe('7') // the 409 body's currentRoute.version
+    expect(within(row).queryByTestId('conflict-chooser')).toBeNull()
+  })
+
+  it('a repeated conflict on Re-apply replaces the chooser with the newer failure body instead of erroring out', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(makeResponse(409, makeConflictBody({ currentRoute: makeRoute({ version: 7 }) })))
+      .mockResolvedValueOnce(
+        makeResponse(
+          409,
+          makeConflictBody({
+            conflictingDispatcher: { dispatcherId: 'dispatcher_other', name: 'Ada' },
+            currentRoute: makeRoute({ version: 9 }),
+          }),
+        ),
+      )
+    const { store, RoutesPanel } = await freshHarness({ fetchImpl })
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' })])
+    store.getState().applyRouteAssigned(makeRoute({ status: 'assigned', version: 1 }))
+
+    render(<RoutesPanel />)
+    const row = screen.getByTestId('route-row-route_1')
+    fireEvent.click(within(row).getByRole('button', { name: 'Cancel' }))
+    await act(async () => {
+      fireEvent.click(within(row).getByRole('button', { name: 'Confirm cancel' }))
+    })
+    await act(async () => {
+      fireEvent.click(within(row).getByRole('button', { name: 'Re-apply' }))
+    })
+
+    const chooser = within(row).getByTestId('conflict-chooser')
+    expect(chooser.textContent).toContain('Ada')
+    expect(chooser.textContent).toContain('version 9')
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it("Re-apply after a reassign-triggered conflict resubmits reassignRoute with the target truckId and If-Match set to the failure body's currentRoute.version", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(makeResponse(409, makeConflictBody({ currentRoute: makeRoute({ version: 6 }) })))
+      .mockResolvedValueOnce(makeResponse(200, makeRoute({ truckId: 'truck_2', version: 7 })))
+    const { store, RoutesPanel } = await freshHarness({ fetchImpl })
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' }), makeTruck({ truckId: 'truck_2' })])
+    store.getState().applyRouteAssigned(makeRoute({ status: 'assigned', version: 1, truckId: 'truck_1' }))
+
+    render(<RoutesPanel />)
+    const row = screen.getByTestId('route-row-route_1')
+    const reassignSelect = within(row).getByLabelText('Reassign route_1 to')
+    fireEvent.change(reassignSelect, { target: { value: 'truck_2' } })
+    fireEvent.click(within(row).getByRole('button', { name: 'Reassign' }))
+    await act(async () => {
+      fireEvent.click(within(row).getByRole('button', { name: 'Confirm reassign' }))
+    })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole('button', { name: 'Re-apply' }))
+    })
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    const [url, init] = fetchImpl.mock.calls[1]!
+    expect(url).toBe('/api/routes/route_1/reassign')
+    expect((init as RequestInit).method).toBe('PUT')
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ truckId: 'truck_2' })
+    expect((init.headers as Record<string, string>)['If-Match']).toBe('6') // the 409 body's currentRoute.version
+    expect(within(row).queryByTestId('conflict-chooser')).toBeNull()
+  })
+})
+
+describe('RoutesPanel — FR-31 avoidance notice (fires while armed, silent while unarmed)', () => {
+  it('shows a non-blocking notice naming the other dispatcher when the live version moves while cancel is armed, and the confirm control stays enabled', async () => {
+    const { store, RoutesPanel } = await freshHarness()
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' })])
+    store.getState().applyRouteAssigned(makeRoute({ status: 'assigned', version: 1 }))
+
+    const { rerender } = render(<RoutesPanel />)
+    const row = screen.getByTestId('route-row-route_1')
+    fireEvent.click(within(row).getByRole('button', { name: 'Cancel' }))
+
+    expect(within(row).queryByTestId('avoidance-notice-route_1')).toBeNull()
+
+    // Another dispatcher's change lands via WS echo before we confirm.
+    store
+      .getState()
+      .applyRouteUpdated(makeRoute({ status: 'assigned', version: 2, updatedBy: { dispatcherId: 'dispatcher_other', name: 'Ada' } }))
+    rerender(<RoutesPanel />)
+
+    const notice = within(row).getByTestId('avoidance-notice-route_1')
+    expect(notice.textContent).toContain('Ada')
+    expect(notice.textContent).toMatch(/version/i)
+
+    const confirmButton = within(row).getByRole('button', { name: 'Confirm cancel' }) as HTMLButtonElement
+    expect(confirmButton.disabled).toBe(false) // non-blocking: still submittable
+  })
+
+  it('shows the same non-blocking notice when the live version moves while reassign (not cancel) is armed', async () => {
+    const { store, RoutesPanel } = await freshHarness()
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' }), makeTruck({ truckId: 'truck_2' })])
+    store.getState().applyRouteAssigned(makeRoute({ status: 'assigned', version: 1, truckId: 'truck_1' }))
+
+    const { rerender } = render(<RoutesPanel />)
+    const row = screen.getByTestId('route-row-route_1')
+    const reassignSelect = within(row).getByLabelText('Reassign route_1 to')
+    fireEvent.change(reassignSelect, { target: { value: 'truck_2' } })
+    fireEvent.click(within(row).getByRole('button', { name: 'Reassign' }))
+
+    expect(within(row).queryByTestId('avoidance-notice-route_1')).toBeNull()
+
+    // Another dispatcher's change lands via WS echo before we confirm.
+    store.getState().applyRouteUpdated(
+      makeRoute({ status: 'assigned', version: 2, truckId: 'truck_1', updatedBy: { dispatcherId: 'dispatcher_other', name: 'Ada' } }),
+    )
+    rerender(<RoutesPanel />)
+
+    const notice = within(row).getByTestId('avoidance-notice-route_1')
+    expect(notice.textContent).toContain('Ada')
+    expect(notice.textContent).toMatch(/version/i)
+
+    const confirmButton = within(row).getByRole('button', { name: 'Confirm reassign' }) as HTMLButtonElement
+    expect(confirmButton.disabled).toBe(false) // non-blocking: still submittable
+  })
+
+  it('shows no notice when the version moves while the row has no armed action', async () => {
+    const { store, RoutesPanel } = await freshHarness()
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' })])
+    store.getState().applyRouteAssigned(makeRoute({ status: 'assigned', version: 1 }))
+
+    const { rerender } = render(<RoutesPanel />)
+    const row = screen.getByTestId('route-row-route_1')
+
+    store
+      .getState()
+      .applyRouteUpdated(makeRoute({ status: 'assigned', version: 2, updatedBy: { dispatcherId: 'dispatcher_other', name: 'Ada' } }))
+    rerender(<RoutesPanel />)
+
+    expect(within(row).queryByTestId('avoidance-notice-route_1')).toBeNull()
+  })
+
+  it('proceeding after the notice can still land in the ConflictChooser if the submit itself then 409s', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(409, makeConflictBody({ currentRoute: makeRoute({ version: 2 }) })))
+    const { store, RoutesPanel } = await freshHarness({ fetchImpl })
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1' })])
+    store.getState().applyRouteAssigned(makeRoute({ status: 'assigned', version: 1 }))
+
+    const { rerender } = render(<RoutesPanel />)
+    const row = screen.getByTestId('route-row-route_1')
+    fireEvent.click(within(row).getByRole('button', { name: 'Cancel' }))
+
+    store
+      .getState()
+      .applyRouteUpdated(makeRoute({ status: 'assigned', version: 2, updatedBy: { dispatcherId: 'dispatcher_other', name: 'Ada' } }))
+    rerender(<RoutesPanel />)
+    expect(within(row).getByTestId('avoidance-notice-route_1')).toBeTruthy()
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole('button', { name: 'Confirm cancel' }))
+    })
+
+    expect(within(row).getByTestId('conflict-chooser')).toBeTruthy()
+  })
+})
+
+describe('RoutesPanel — create never conflicts (FR-10, FR-34 out of scope for FR-13)', () => {
+  it("createRoute's error path is unchanged — describeFailure's plain text renders, the ConflictChooser never appears for create", async () => {
+    // createRoute has no If-Match and cannot conflict server-side (Boundaries
+    // & Constraints) — but api-client's mutate() normalizes any 409 the same
+    // way regardless of endpoint, so this proves CreateRouteForm's own error
+    // path (plain describeFailure text) is untouched even in that
+    // hypothetical, and the chooser is never wired into create's call site.
+    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(409, makeConflictBody({ currentRoute: makeRoute({ version: 9 }) })))
+    const { store, RoutesPanel } = await freshHarness({ fetchImpl })
+    store.getState().setFleet([makeTruck({ truckId: 'truck_1', status: 'idle' })])
+
+    render(<RoutesPanel />)
+    fireEvent.change(screen.getByLabelText('Truck'), { target: { value: 'truck_1' } })
+    fireEvent.change(screen.getByLabelText('Destination'), { target: { value: 'Depot B' } })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create route' }))
+    })
+
+    expect(screen.queryByTestId('conflict-chooser')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toContain('System')
+    expect(screen.getByRole('alert').textContent).toContain('Reload and retry')
   })
 })
 

@@ -91,6 +91,31 @@
   font-size: 13px;
 }
 
+.notice {
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--warning, #9a6700);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning, #9a6700) 12%, transparent);
+  color: var(--warning, #9a6700);
+  font-size: 13px;
+}
+
+.conflict {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger, #a01f1f);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger, #a01f1f) 6%, transparent);
+}
+
+.conflictMessage {
+  margin: 0;
+  font-size: 13px;
+}
+
 .routeList,
 .auditList {
   list-style: none;

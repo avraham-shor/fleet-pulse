@@ -26,10 +26,11 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { getFleetPulseStore } from '../../../store/store.ts'
 import { selectRoutes, selectAuditTrail } from '../../../store/slices/routesSlice.ts'
 import { selectFleetTrucks, selectFleetFetchStatus } from '../../../store/slices/fleetSlice.ts'
-import { createApiClient, type TransportFailure } from '../../../transport/api-client.ts'
+import { createApiClient, type TransportFailure, type TransportResult } from '../../../transport/api-client.ts'
 import { getWsSendFacade } from '../../../transport/ws-manager.ts'
-import type { Route, RouteStatus, Truck } from '../../../contract/rest.ts'
+import type { ConflictErrorBody, Route, RouteStatus, Truck } from '../../../contract/rest.ts'
 import { registerWidget } from '../../registry.ts'
+import { ConflictChooser } from './ConflictChooser.tsx'
 import styles from './RoutesPanel.module.css'
 
 const useFleetPulseStore = getFleetPulseStore()
@@ -194,12 +195,36 @@ interface RouteRowProps {
   trucks: Truck[]
 }
 
+/** A route mutation's own 409 body, plus enough to resubmit the *same*
+ * intended mutation (FR-13) once more — either against the version this
+ * 409 body carried, or against a still-newer one if re-applying conflicts
+ * again itself. Typed against `updateRouteStatus`/`reassignRoute`'s shared
+ * result shape directly (not derived from one of the two methods alone) so
+ * it can't quietly stop matching either if their signatures ever diverge. */
+interface RowConflict {
+  body: ConflictErrorBody
+  intentLabel: string
+  mutate: (ifMatchVersion: number) => Promise<TransportResult<Route>>
+}
+
 function RouteRow({ route, trucks }: RouteRowProps) {
   const [reassignTarget, setReassignTarget] = useState('')
   const [reassignArmed, setReassignArmed] = useState(false)
   const [cancelArmed, setCancelArmed] = useState(false)
   const [inFlight, setInFlight] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // FR-31: the route's version captured at the moment *each* action was
+  // armed — compared against the live `route.version` prop (WS-echo-
+  // sourced, AD-16) on every render to surface a since-moved version
+  // before a save is attempted. Tracked separately per action so arming
+  // one (e.g. cancel) can never clobber the other's (reassign's) baseline
+  // if both end up armed on the same row at once.
+  const [cancelArmedAtVersion, setCancelArmedAtVersion] = useState<number | null>(null)
+  const [reassignArmedAtVersion, setReassignArmedAtVersion] = useState<number | null>(null)
+  // FR-13: populated only from a mutation's own 409 body — never derived
+  // from store state — so the chooser is correct regardless of when the
+  // matching WS echo happens to land.
+  const [conflict, setConflict] = useState<RowConflict | null>(null)
 
   // Defensive fallback: an unrecognized `route.status` (e.g. a future wire
   // value this build doesn't know about) must never throw during render —
@@ -207,8 +232,18 @@ function RouteRow({ route, trucks }: RouteRowProps) {
   const legalTransitions = ROUTE_LEGAL_TRANSITIONS[route.status] ?? []
   const isNonTerminal = route.status === 'assigned' || route.status === 'in-progress'
   const otherTrucks = trucks.filter((truck) => truck.truckId !== route.truckId)
+  // Each notice is gated by its own action's controls still being on
+  // screen — a route racing to a terminal status (or losing its only other
+  // truck) while armed hides the confirm control the notice refers to, so
+  // the notice must never outlive it.
+  const cancelActionVisible = legalTransitions.includes('cancelled')
+  const reassignActionVisible = isNonTerminal && otherTrucks.length > 0
+  const cancelVersionDrifted = cancelArmedAtVersion !== null && route.version !== cancelArmedAtVersion
+  const reassignVersionDrifted = reassignArmedAtVersion !== null && route.version !== reassignArmedAtVersion
+  const showCancelNotice = cancelArmed && cancelActionVisible && cancelVersionDrifted
+  const showReassignNotice = reassignArmed && reassignActionVisible && reassignVersionDrifted
 
-  async function runMutation(mutation: () => ReturnType<typeof routesApiClient.updateRouteStatus>) {
+  async function runMutation(mutation: () => Promise<TransportResult<Route>>) {
     setError(null)
     setInFlight(true)
     const result = await mutation()
@@ -216,36 +251,101 @@ function RouteRow({ route, trucks }: RouteRowProps) {
     return result
   }
 
+  function clearConflictState() {
+    setConflict(null)
+    setCancelArmed(false)
+    setReassignArmed(false)
+    setCancelArmedAtVersion(null)
+    setReassignArmedAtVersion(null)
+    setError(null)
+    // Matches the direct-success reassign path below: without this, Adopt/
+    // Back-out/a successful Re-apply following a reassign-triggered
+    // conflict would leave the <select> showing the stale armed target.
+    setReassignTarget('')
+  }
+
   async function handleTransition(nextStatus: RouteStatus) {
-    if (nextStatus === 'cancelled') {
-      if (!cancelArmed) {
-        setCancelArmed(true)
-        return
-      }
+    if (nextStatus === 'cancelled' && !cancelArmed) {
+      // First click just arms the confirm control — no request sent yet
+      // (NFR-6); captures the version this action was armed against so
+      // FR-31 can detect a since-moved version before the second click.
+      setCancelArmed(true)
+      setCancelArmedAtVersion(route.version)
+      return
     }
     const result = await runMutation(() => routesApiClient.updateRouteStatus(route.routeId, route.version, { status: nextStatus }))
     setCancelArmed(false)
-    if (!result.ok) setError(describeFailure(result.failure))
-    // Pessimistic UI: success clears only local in-flight/confirm state —
-    // the row's own status updates once the route_updated echo lands.
+    setCancelArmedAtVersion(null)
+    if (result.ok) return // status updates once the route_updated echo lands
+    if (result.failure.kind === 'conflict') {
+      const failureBody = result.failure.body
+      setConflict({
+        body: failureBody,
+        intentLabel: TRANSITION_LABELS[nextStatus],
+        mutate: (ifMatchVersion) => routesApiClient.updateRouteStatus(route.routeId, ifMatchVersion, { status: nextStatus }),
+      })
+      return
+    }
+    setError(describeFailure(result.failure))
   }
 
   async function handleReassign() {
     if (reassignTarget === '' || reassignTarget === route.truckId) return
     if (!reassignArmed) {
       setReassignArmed(true)
+      setReassignArmedAtVersion(route.version)
       return
     }
-    const result = await runMutation(() => routesApiClient.reassignRoute(route.routeId, route.version, { truckId: reassignTarget }))
+    const targetTruckId = reassignTarget
+    const result = await runMutation(() => routesApiClient.reassignRoute(route.routeId, route.version, { truckId: targetTruckId }))
     setReassignArmed(false)
+    setReassignArmedAtVersion(null)
     if (result.ok) {
       // review finding, iteration 1: reset the target too, alongside the
       // confirm-state reset above, so a stale target can't silently
       // resubmit a same-truck reassign on the next click.
       setReassignTarget('')
-    } else {
-      setError(describeFailure(result.failure))
+      return
     }
+    if (result.failure.kind === 'conflict') {
+      setConflict({
+        body: result.failure.body,
+        intentLabel: `Reassign to ${targetTruckId}`,
+        mutate: (ifMatchVersion) => routesApiClient.reassignRoute(route.routeId, ifMatchVersion, { truckId: targetTruckId }),
+      })
+      return
+    }
+    setError(describeFailure(result.failure))
+  }
+
+  async function handleReapply() {
+    if (conflict === null) return
+    const { mutate, intentLabel, body } = conflict
+    // Resubmits the exact same intended mutation, `If-Match` set to
+    // `currentRoute.version` from this failure's own body (FR-13).
+    const result = await runMutation(() => mutate(body.currentRoute.version))
+    if (result.ok) {
+      clearConflictState()
+      return
+    }
+    if (result.failure.kind === 'conflict') {
+      // Raced again — same intent, newer body to re-apply against.
+      setConflict({ body: result.failure.body, intentLabel, mutate })
+      return
+    }
+    setConflict(null)
+    setError(describeFailure(result.failure))
+  }
+
+  function handleAdopt() {
+    // Adopt and Back out are mechanically identical (Design Notes): routes
+    // have no mergeable fields, so both just clear local state and send no
+    // request — offered as two distinct affordances for dispatcher clarity.
+    clearConflictState()
+  }
+
+  function handleBackOut() {
+    clearConflictState()
   }
 
   return (
@@ -261,54 +361,79 @@ function RouteRow({ route, trucks }: RouteRowProps) {
         v{route.version} · last updated by {route.updatedBy.name}
       </p>
 
-      {legalTransitions.length > 0 && (
-        <div className={styles.actionsRow}>
-          {legalTransitions.map((target) => (
-            <button
-              key={target}
-              type="button"
-              className={target === 'cancelled' ? styles.buttonDanger : styles.button}
-              disabled={inFlight}
-              onClick={() => void handleTransition(target)}
-            >
-              {inFlight
-                ? 'Saving…'
-                : target === 'cancelled' && cancelArmed
-                  ? 'Confirm cancel'
-                  : TRANSITION_LABELS[target]}
-            </button>
-          ))}
-        </div>
-      )}
+      {conflict !== null ? (
+        inFlight ? (
+          <p className={styles.meta}>Saving…</p>
+        ) : (
+          <ConflictChooser
+            conflictingDispatcher={conflict.body.conflictingDispatcher}
+            currentRoute={conflict.body.currentRoute}
+            myIntentLabel={conflict.intentLabel}
+            onAdopt={handleAdopt}
+            onReapply={() => void handleReapply()}
+            onBackOut={handleBackOut}
+          />
+        )
+      ) : (
+        <>
+          {(showCancelNotice || showReassignNotice) && (
+            <p className={styles.notice} role="status" data-testid={`avoidance-notice-${route.routeId}`}>
+              {route.updatedBy.name} moved this route to version {route.version} since you armed this action — you
+              can still confirm.
+            </p>
+          )}
 
-      {isNonTerminal && otherTrucks.length > 0 && (
-        <div className={styles.actionsRow}>
-          <select
-            aria-label={`Reassign ${route.routeId} to`}
-            className={styles.select}
-            value={reassignTarget}
-            disabled={inFlight}
-            onChange={(event) => {
-              setReassignTarget(event.target.value)
-              setReassignArmed(false)
-            }}
-          >
-            <option value="">Reassign to…</option>
-            {otherTrucks.map((truck) => (
-              <option key={truck.truckId} value={truck.truckId}>
-                {truck.truckId}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className={styles.button}
-            disabled={inFlight || reassignTarget === ''}
-            onClick={() => void handleReassign()}
-          >
-            {inFlight ? 'Saving…' : reassignArmed ? 'Confirm reassign' : 'Reassign'}
-          </button>
-        </div>
+          {legalTransitions.length > 0 && (
+            <div className={styles.actionsRow}>
+              {legalTransitions.map((target) => (
+                <button
+                  key={target}
+                  type="button"
+                  className={target === 'cancelled' ? styles.buttonDanger : styles.button}
+                  disabled={inFlight}
+                  onClick={() => void handleTransition(target)}
+                >
+                  {inFlight
+                    ? 'Saving…'
+                    : target === 'cancelled' && cancelArmed
+                      ? 'Confirm cancel'
+                      : TRANSITION_LABELS[target]}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {isNonTerminal && otherTrucks.length > 0 && (
+            <div className={styles.actionsRow}>
+              <select
+                aria-label={`Reassign ${route.routeId} to`}
+                className={styles.select}
+                value={reassignTarget}
+                disabled={inFlight}
+                onChange={(event) => {
+                  setReassignTarget(event.target.value)
+                  setReassignArmed(false)
+                  setReassignArmedAtVersion(null)
+                }}
+              >
+                <option value="">Reassign to…</option>
+                {otherTrucks.map((truck) => (
+                  <option key={truck.truckId} value={truck.truckId}>
+                    {truck.truckId}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className={styles.button}
+                disabled={inFlight || reassignTarget === ''}
+                onClick={() => void handleReassign()}
+              >
+                {inFlight ? 'Saving…' : reassignArmed ? 'Confirm reassign' : 'Reassign'}
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {error !== null && (
