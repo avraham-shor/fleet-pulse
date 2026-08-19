@@ -358,3 +358,65 @@ describe('api-client — GET /api/fleet + circuit breaker (FR-24, FR-25)', () =>
     expect(fetchImpl).toHaveBeenCalledWith('/api/fleet')
   })
 })
+
+describe('api-client — GET /api/routes (story 7, no breaker wrapping)', () => {
+  it('is not a mutation — no X-Dispatcher-Id header, never refused for being unregistered', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, [SAMPLE_ROUTE]))
+    const client = createApiClient({ getDispatcherId: () => null, fetchImpl })
+
+    const result = await client.getRoutes()
+    expect(result).toEqual({ ok: true, data: [SAMPLE_ROUTE] })
+    expect(fetchImpl).toHaveBeenCalledWith('/api/routes')
+    const init = fetchImpl.mock.calls[0]![1] as RequestInit | undefined
+    expect(init?.headers).toBeUndefined()
+  })
+
+  it('a 503 maps to {kind: "retryable"} — a single attempt, no auto-retry loop (unlike getFleet)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(make503(5))
+    const client = createApiClient({ getDispatcherId: () => null, fetchImpl })
+
+    const result = await client.getRoutes()
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(result).toEqual({ ok: false, failure: { kind: 'retryable', retryAfterSeconds: 5 } })
+  })
+
+  it('never opens or interacts with the getFleet circuit breaker', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(make503(3))
+      .mockResolvedValueOnce(make503(3))
+      .mockResolvedValueOnce(make503(3))
+    const client = createApiClient({ getDispatcherId: () => null, fetchImpl })
+
+    await client.getRoutes()
+    await client.getRoutes()
+    await client.getRoutes()
+    expect(fetchImpl).toHaveBeenCalledTimes(3) // each call actually hit the network — no breaker short-circuit
+    expect(client.getBreakerState()).toBe('closed')
+  })
+
+  it('a non-503 failure status maps to {kind: "error", body}', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(500, { error: 'internal', message: 'oops' }))
+    const client = createApiClient({ getDispatcherId: () => null, fetchImpl })
+
+    const result = await client.getRoutes()
+    expect(result).toEqual({ ok: false, failure: { kind: 'error', body: { error: 'internal', message: 'oops' } } })
+  })
+
+  it('a malformed response body degrades to a safe error result rather than throwing', async () => {
+    const badJson = { status: 200, ok: true, headers: { get: () => null }, json: async () => { throw new Error('boom') } }
+    const fetchImpl = vi.fn().mockResolvedValue(badJson as unknown as Response)
+    const client = createApiClient({ getDispatcherId: () => null, fetchImpl })
+
+    const result = await client.getRoutes()
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.failure.kind).toBe('error')
+  })
+
+  it('a thrown fetch error (network down) never escapes — normalized to {kind: "error"}', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError('failed to fetch'))
+    const client = createApiClient({ getDispatcherId: () => null, fetchImpl })
+
+    await expect(client.getRoutes()).resolves.toMatchObject({ ok: false, failure: { kind: 'error' } })
+  })
+})

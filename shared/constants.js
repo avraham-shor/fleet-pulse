@@ -47,6 +47,12 @@ export const CLIENT_THRESHOLDS = Object.freeze({
   // two are editable independently later.
   ANOMALY_LOG_CAP: 300,
 
+  // AD-10/NFR-3: cap on routesSlice's session-scoped audit trail
+  // (createBoundedBuffer, mirroring ANOMALY_LOG_CAP's own pattern). No
+  // existing constant covered this either (story 7 design notes) — sized
+  // to match its sibling caps rather than inventing an unrelated number.
+  AUDIT_TRAIL_CAP: 300,
+
   // One batched commit covers all trucks; absorbs SSE floods (NFR-1)
   RENDER_COALESCE_MAX_COMMITS_PER_SEC: 10,
 

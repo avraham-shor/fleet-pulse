@@ -1,0 +1,172 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.heading {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.createForm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 8px;
+}
+
+.fieldRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.label {
+  font-size: 13px;
+  color: var(--text, #6b6375);
+  min-width: 80px;
+}
+
+.input,
+.select {
+  font: inherit;
+  padding: 4px 8px;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 6px;
+  background: var(--bg, #fff);
+  color: inherit;
+}
+
+.button {
+  font: inherit;
+  padding: 4px 12px;
+  border: 1px solid var(--accent, #aa3bff);
+  border-radius: 6px;
+  background: var(--accent, #aa3bff);
+  color: #fff;
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.buttonDanger {
+  font: inherit;
+  padding: 4px 12px;
+  border: 1px solid var(--danger, #a01f1f);
+  border-radius: 6px;
+  background: var(--danger, #a01f1f);
+  color: #fff;
+  cursor: pointer;
+}
+
+.buttonDanger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.warning {
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--warning, #9a6700);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning, #9a6700) 12%, transparent);
+  color: var(--warning, #9a6700);
+  font-size: 13px;
+}
+
+.error {
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--danger, #a01f1f);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger, #a01f1f) 10%, transparent);
+  color: var(--danger, #a01f1f);
+  font-size: 13px;
+}
+
+.routeList,
+.auditList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.empty {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--text, #6b6375);
+}
+
+.routeRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 6px;
+}
+
+.routeHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.truckId {
+  font-family: ui-monospace, Consolas, monospace;
+  font-weight: 600;
+}
+
+.destination {
+  flex: 1;
+}
+
+.statusBadge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border, #e5e4e7);
+  text-transform: capitalize;
+}
+
+.meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text, #6b6375);
+}
+
+.actionsRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.auditRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 10px;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text, #6b6375);
+}
+
+.auditEvent {
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--text-h, #08060d);
+}

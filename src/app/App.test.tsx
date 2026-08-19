@@ -157,4 +157,17 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: 'Register' })).toBeTruthy()
     expect(screen.getByText('No other dispatchers active')).toBeTruthy()
   })
+
+  it('AD-6: the routes widget mounts through the shell via its own side-effect import — no edit to FleetOverview/PresencePanel needed', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+
+    const App = await freshApp()
+    render(<App />)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(screen.getByRole('heading', { name: 'Create route' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Active routes' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Audit trail' })).toBeTruthy()
+    expect(screen.getByText('No routes yet')).toBeTruthy()
+  })
 })

@@ -12,6 +12,7 @@ import { getWidgets } from '../ui/registry.ts'
 import { ErrorBoundary } from '../ui/ErrorBoundary.tsx'
 import '../ui/widgets/fleetOverview/FleetOverview.tsx'
 import '../ui/widgets/presence/PresencePanel.tsx'
+import '../ui/widgets/routes/RoutesPanel.tsx'
 import styles from './App.module.css'
 
 export default function App() {

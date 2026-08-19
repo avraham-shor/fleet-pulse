@@ -42,7 +42,7 @@ development_status:
   1-4-store-foundation-and-the-telemetry-integrity-engine: review
   1-5-live-fleet-overview: review
   1-6-dispatcher-presence: review
-  1-7-route-lifecycle-management: backlog
+  1-7-route-lifecycle-management: review
   1-8-conflict-avoidance-and-resolution: backlog
   1-9-vehicle-detail-panel-resilience-and-degraded-mode: backlog
   1-10-observability-and-submission-traceability: backlog

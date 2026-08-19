@@ -13,7 +13,7 @@
 // means isolating the module graph.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Truck } from '../contract/rest.ts'
+import type { Route, Truck } from '../contract/rest.ts'
 import { CLIENT_THRESHOLDS } from '../../shared/constants.js'
 
 class FakeEventSource {
@@ -100,6 +100,32 @@ function makeResponse(status: number, body: unknown): Response {
     headers: { get: () => null },
     json: async () => body,
   } as unknown as Response
+}
+
+function makeRoute(overrides: Partial<Route> = {}): Route {
+  return {
+    routeId: 'route_1',
+    truckId: 'truck_1',
+    status: 'assigned',
+    version: 1,
+    destination: 'Warehouse A',
+    createdBy: { dispatcherId: 'dispatcher_1', name: 'Alice' },
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    updatedBy: { dispatcherId: 'dispatcher_1', name: 'Alice' },
+    ...overrides,
+  }
+}
+
+/** Routes fetch responses by URL — `getFleet()` and `getRoutes()` share the
+ * same global `fetch` stub, so a test that cares about both endpoints'
+ * responses independently needs this instead of a single blanket mock. */
+function makeUrlAwareFetch(byUrl: { fleet?: Response; routes?: Response }) {
+  return vi.fn((input: unknown) => {
+    const url = String(input)
+    if (url.includes('/api/routes')) return Promise.resolve(byUrl.routes ?? makeResponse(200, []))
+    return Promise.resolve(byUrl.fleet ?? makeResponse(200, []))
+  })
 }
 
 beforeEach(() => {
@@ -271,5 +297,108 @@ describe('getBootstrap: presence wiring (FR-16..19, AD-8)', () => {
     FakeWebSocket.instances[0]!.simulateOpen()
     expect(() => FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'fleet_reset' })).not.toThrow()
     expect(store.getState().presence.dispatchers).toEqual({})
+  })
+})
+
+describe('getBootstrap: routes wiring (FR-10..15, FR-34, AD-16, AD-7)', () => {
+  it('wires route_assigned/_updated/_reassigned directly into the routes slice (direct commit, not the coalescing scheduler)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'route_assigned', route: makeRoute({ version: 1 }) })
+    // Not coalesced — applied synchronously, no timer advance needed.
+    expect(store.getState().routes.routes['route_1']?.status).toBe('assigned')
+
+    FakeWebSocket.instances[0]!.simulateServerMessage({
+      type: 'route_updated',
+      route: makeRoute({ version: 2, status: 'in-progress' }),
+    })
+    expect(store.getState().routes.routes['route_1']?.status).toBe('in-progress')
+
+    FakeWebSocket.instances[0]!.simulateServerMessage({
+      type: 'route_reassigned',
+      route: makeRoute({ version: 3, status: 'in-progress', truckId: 'truck_2' }),
+    })
+    expect(store.getState().routes.routes['route_1']?.truckId).toBe('truck_2')
+  })
+
+  it("FR-34's hydration gap fix: the first WS connection populates routesSlice from GET /api/routes before any live echo arrives", async () => {
+    const fetchMock = makeUrlAwareFetch({ routes: makeResponse(200, [makeRoute()]) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+
+    expect(store.getState().routes.routes['route_1']).toBeUndefined() // not yet — onConnect hasn't fired
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    await vi.advanceTimersByTimeAsync(0) // let getRoutes() resolve
+
+    expect(store.getState().routes.routes['route_1']?.destination).toBe('Warehouse A')
+  })
+
+  it('hydrateRoutes() also runs on reconnect, catching up on anything that changed while disconnected', async () => {
+    const fetchMock = makeUrlAwareFetch({ routes: makeResponse(200, [makeRoute({ version: 1 })]) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(store.getState().routes.routes['route_1']?.version).toBe(1)
+
+    fetchMock.mockImplementation((input: unknown) => {
+      const url = String(input)
+      if (url.includes('/api/routes')) return Promise.resolve(makeResponse(200, [makeRoute({ version: 2, status: 'in-progress' })]))
+      return Promise.resolve(makeResponse(200, []))
+    })
+
+    FakeWebSocket.instances[0]!.simulateDrop()
+    await vi.advanceTimersByTimeAsync(CLIENT_THRESHOLDS.RECONNECT_BACKOFF_INITIAL_MS)
+    expect(FakeWebSocket.instances).toHaveLength(2)
+
+    FakeWebSocket.instances[1]!.simulateOpen()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(store.getState().routes.routes['route_1']?.version).toBe(2)
+    expect(store.getState().routes.routes['route_1']?.status).toBe('in-progress')
+  })
+
+  it('closes the review finding (iteration 3): apiClient.getRoutes() is called exactly once on the very first connection, not twice', async () => {
+    const fetchMock = makeUrlAwareFetch({})
+    vi.stubGlobal('fetch', fetchMock)
+    const { getBootstrap } = await freshBootstrapWithWs()
+    getBootstrap()
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    await vi.advanceTimersByTimeAsync(0)
+
+    const routesCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('/api/routes'))
+    expect(routesCalls).toHaveLength(1)
+  })
+
+  it('best-effort: a failed getRoutes() call does nothing further — no throw, routes slice just stays empty for the next echo to fill', async () => {
+    const fetchMock = makeUrlAwareFetch({ routes: makeResponse(500, { error: 'boom', message: 'boom' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+
+    expect(() => FakeWebSocket.instances[0]!.simulateOpen()).not.toThrow()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(store.getState().routes.routes).toEqual({})
+  })
+
+  it('AD-7: hydrateRoutes goes through api-client — the same global fetch stub api-client itself uses, never a second-source fetch call site', async () => {
+    const fetchMock = makeUrlAwareFetch({ routes: makeResponse(200, [makeRoute()]) })
+    vi.stubGlobal('fetch', fetchMock)
+    const { getBootstrap } = await freshBootstrapWithWs()
+    getBootstrap()
+
+    FakeWebSocket.instances[0]!.simulateOpen()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/routes')
   })
 })

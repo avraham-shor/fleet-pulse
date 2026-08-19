@@ -335,11 +335,16 @@ export function createWsManager(options: CreateWsManagerOptions): WsManager {
 }
 
 /** The narrow send-only shape `ui/` is allowed to reach transport with —
- * this story's widened AD-1 facade (register + sendViewing only, never
- * `connect`/`close`/the getters). */
+ * story 1.6's facade (register + sendViewing only, never `connect`/`close`).
+ * `getDispatcherId` is story 7's additive, optional widening: `RoutesPanel`
+ * needs a live read of the session-scoped identity (AD-17) to construct its
+ * own `api-client` instance without importing `ws-manager` outright (AD-1)
+ * — optional so this stays backward-compatible with `PresencePanel.tsx` and
+ * its tests, which never read it. */
 export interface WsSendFacade {
   register(name: string): void
   sendViewing(truckId: string | null): void
+  getDispatcherId?(): string | null
 }
 
 let wsSendFacade: WsSendFacade | null = null

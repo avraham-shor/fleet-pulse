@@ -49,6 +49,15 @@ export interface ApiClient {
    * `Retry-After` while the breaker is still closed (FR-24). Not a
    * mutation — no dispatcher header, never refused for being unregistered. */
   getFleet(): Promise<TransportResult<Truck[]>>
+  /** `GET /api/routes` — every current route (story 7). A plain
+   * single-attempt call, normalized to `TransportResult` the same way
+   * `fetchFleetOnce` normalizes `GET /api/fleet`, but deliberately **not**
+   * wrapped in `getFleet`'s breaker/auto-retry loop — that machinery is
+   * FR-25-specific to the fleet endpoint. Not a mutation — no dispatcher
+   * header, never refused for being unregistered. Feeds `hydrateRoutes()`
+   * (bootstrap.ts), which is documented best-effort: a failed call here
+   * just means the routes slice catches up from the next live WS echo. */
+  getRoutes(): Promise<TransportResult<Route[]>>
   /** `POST /api/routes` (FR-10). No `If-Match` — a create has no version
    * yet (FR-34 covers that race client-side instead). */
   createRoute(body: CreateRouteRequestBody): Promise<TransportResult<Route>>
@@ -239,6 +248,28 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
     }
   }
 
+  /** `GET /api/routes` — mirrors `fetchFleetOnce`'s normalize-to-
+   * `TransportResult` shape exactly, but with no breaker wrapping (see the
+   * `ApiClient.getRoutes` doc comment above) and no auto-retry loop: a
+   * single attempt, whatever it returns. */
+  async function getRoutes(): Promise<TransportResult<Route[]>> {
+    let res: Response
+    try {
+      res = await fetchImpl(`${baseUrl}/api/routes`)
+    } catch {
+      return { ok: false, failure: networkErrorFailure('GET /api/routes') }
+    }
+    if (res.status === 503) {
+      return { ok: false, failure: { kind: 'retryable', retryAfterSeconds: parseRetryAfterSeconds(res) } }
+    }
+    if (!res.ok) {
+      return { ok: false, failure: { kind: 'error', body: await readErrorBody(res) } }
+    }
+    const data = await safeJson(res)
+    if (data === null) return { ok: false, failure: invalidResponseFailure(res.status) }
+    return { ok: true, data: data as Route[] }
+  }
+
   async function mutate<T>(
     path: string,
     method: 'POST' | 'PATCH' | 'PUT',
@@ -281,6 +312,7 @@ export function createApiClient(options: CreateApiClientOptions): ApiClient {
 
   return {
     getFleet,
+    getRoutes,
     createRoute: (body) => mutate<Route>('/api/routes', 'POST', body),
     updateRouteStatus: (routeId, expectedVersion, body) =>
       mutate<Route>(`/api/routes/${routeId}`, 'PATCH', body, expectedVersion),

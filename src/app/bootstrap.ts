@@ -21,9 +21,9 @@
 // a second SSE/WS connection or fires a second `getFleet()` — the actual
 // wiring in `createBootstrap()` below runs at most once per page load.
 
-import { createApiClient } from '../transport/api-client.ts'
+import { createApiClient, type ApiClient } from '../transport/api-client.ts'
 import { createSseManager } from '../transport/sse-manager.ts'
-import { createWsManager, setWsSendFacade } from '../transport/ws-manager.ts'
+import { createWsManager, setWsSendFacade, type WsManager } from '../transport/ws-manager.ts'
 import type { ServerWsMessage } from '../contract/ws-server.ts'
 import { createPipeline } from '../pipeline/index.ts'
 import { createCoalescingCommitScheduler, getFleetPulseStore, type CoalescingCommitScheduler, type FleetPulseStore } from '../store/store.ts'
@@ -38,11 +38,7 @@ export interface Bootstrap {
 let bootstrap: Bootstrap | null = null
 let stalenessIntervalId: ReturnType<typeof setInterval> | null = null
 
-function startInitialFleetFetch(
-  store: UseBoundStore<StoreApi<FleetPulseStore>>,
-  getDispatcherId: () => string | null,
-): void {
-  const apiClient = createApiClient({ getDispatcherId })
+function startInitialFleetFetch(store: UseBoundStore<StoreApi<FleetPulseStore>>, apiClient: ApiClient): void {
   // Fire-and-forget from the caller's point of view: the store update is
   // the only observable effect, and both branches (ok/error) are handled —
   // nothing here can produce an unhandled rejection.
@@ -52,8 +48,30 @@ function startInitialFleetFetch(
   })
 }
 
-/** Routes each recognized WS message this story owns into the presence
- * slice. Every other recognized type (route/alert/reset events) is a
+/** FR-34's hydration gap fix (Spec Change Log iteration 1, corrected
+ * iteration 2/3): the WS protocol never replays route state on
+ * register/reconnect (only presence is replayed, server.js:742-752), so
+ * `GET /api/routes` is the only way a client learns about a route that
+ * existed before its current connection — otherwise the create-route
+ * warn-and-confirm would silently fail to fire for a truck whose active
+ * route predates the session. Goes through `apiClient.getRoutes()`
+ * (AD-7 — never a raw `fetch`), applying each returned route via the same
+ * monotonic-write action live echoes use (`applyRouteAssigned` — the
+ * guard's idempotent, so replaying an already-known route is a safe
+ * no-op); this keeps AD-16's "WS echo is the sole writer" framing intact,
+ * since hydration feeds the identical write path rather than adding a
+ * second one. Best-effort: a non-ok result does nothing further — no error
+ * UI, no retry — the slice just catches up from the next live echo. */
+async function hydrateRoutes(store: UseBoundStore<StoreApi<FleetPulseStore>>, apiClient: ApiClient): Promise<void> {
+  const result = await apiClient.getRoutes()
+  if (!result.ok) return
+  for (const route of result.data) {
+    store.getState().applyRouteAssigned(route)
+  }
+}
+
+/** Routes each recognized WS message this story owns into the presence and
+ * routes slices. Every other recognized type (alert/reset events) is a
  * future story's concern — safely ignored here rather than crashing
  * (FR-33: unknown-to-*this*-wiring messages never break the UI). */
 function handlePresenceMessage(
@@ -71,6 +89,18 @@ function handlePresenceMessage(
     case 'dispatcher_viewing':
       scheduler.ingestPresenceViewing({ dispatcherId: msg.dispatcherId, truckId: msg.truckId, now: Date.now() })
       return
+    // Route events are low-rate, direct-commit writes (AD-16) — never
+    // routed through the coalescing scheduler, same as dispatcher_joined/
+    // _left above.
+    case 'route_assigned':
+      store.getState().applyRouteAssigned(msg.route)
+      return
+    case 'route_updated':
+      store.getState().applyRouteUpdated(msg.route)
+      return
+    case 'route_reassigned':
+      store.getState().applyRouteReassigned(msg.route)
+      return
     default:
       return
   }
@@ -84,21 +114,38 @@ function createBootstrap(): Bootstrap {
     onAnomaly: scheduler.ingestAnomalies,
   })
   const sseManager = createSseManager({ onBatch: pipeline.ingest })
-  const wsManager = createWsManager({
+
+  // Forward-referenced: `apiClient`'s `getDispatcherId` reads this live on
+  // every call (AD-17), but `wsManager` itself needs an `onConnect`
+  // callback (which calls `hydrateRoutes()`, which needs `apiClient`)
+  // before it can be constructed. `wsManager` is assigned immediately after
+  // `createWsManager()` returns, before either callback can actually fire.
+  let wsManager: WsManager | undefined
+  const apiClient = createApiClient({ getDispatcherId: () => wsManager?.getDispatcherId() ?? null })
+
+  wsManager = createWsManager({
     onMessage: (msg) => handlePresenceMessage(store, scheduler, msg),
-    // AD-8: the presence slice clears before the server's replay-on-
-    // register rebuilds it fresh — fires on every successful connection,
-    // including reconnects (FR-27's "presence state rebuilds").
-    onConnect: () => store.getState().resetPresence(),
+    onConnect: () => {
+      // AD-8: the presence slice clears before the server's replay-on-
+      // register rebuilds it fresh — fires on every successful connection,
+      // including reconnects (FR-27's "presence state rebuilds").
+      store.getState().resetPresence()
+      // FR-34's hydration gap fix (Spec Change Log iteration 3): called
+      // from exactly this one place — `onConnect` already fires once per
+      // successful connection, including the first, so a separate
+      // bootstrap-time call would double-fire on every page load. Mirrors
+      // `resetPresence()`'s own single call site, immediately above.
+      void hydrateRoutes(store, apiClient)
+    },
   })
   // `ui/`'s only legal reach into transport/ws-manager (AD-1's widened
-  // facade) — narrowed to exactly {register, sendViewing} rather than
-  // handing out the full manager.
-  setWsSendFacade({ register: wsManager.register, sendViewing: wsManager.sendViewing })
+  // facade) — narrowed to {register, sendViewing, getDispatcherId} rather
+  // than handing out the full manager.
+  setWsSendFacade({ register: wsManager.register, sendViewing: wsManager.sendViewing, getDispatcherId: wsManager.getDispatcherId })
 
   sseManager.connect()
   wsManager.connect() // eager, no blocking gate — mirrors sseManager.connect()
-  startInitialFleetFetch(store, wsManager.getDispatcherId)
+  startInitialFleetFetch(store, apiClient)
   stalenessIntervalId = setInterval(() => {
     tickEffectiveTrust(store.getState())
     store.getState().sweepStalePresence(Date.now()) // FR-19 liveness sweep, piggybacked on this same tick

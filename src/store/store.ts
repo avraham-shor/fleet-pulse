@@ -18,10 +18,11 @@ import { createObsSlice, pushAnomaliesPure, type ObsSlice } from './slices/obsSl
 import { createHealthSlice, type HealthSlice } from './slices/healthSlice.ts'
 import { createFleetSlice, type FleetSlice } from './slices/fleetSlice.ts'
 import { createPresenceSlice, applyPresenceViewingPure, type PresenceSlice, type PresenceViewingUpdate } from './slices/presenceSlice.ts'
+import { createRoutesSlice, type RoutesSlice } from './slices/routesSlice.ts'
 import type { PipelineCommit } from '../pipeline/index.ts'
 import type { AnomalyEntry } from '../pipeline/types.ts'
 
-export type FleetPulseStore = TelemetrySlice & ObsSlice & HealthSlice & FleetSlice & PresenceSlice
+export type FleetPulseStore = TelemetrySlice & ObsSlice & HealthSlice & FleetSlice & PresenceSlice & RoutesSlice
 
 /** The store factory. Tests call this directly for per-test isolation
  * (a fresh, unshared instance every time). Production code should not call
@@ -35,6 +36,7 @@ export function createFleetPulseStore(): UseBoundStore<StoreApi<FleetPulseStore>
     ...createHealthSlice(...args),
     ...createFleetSlice(...args),
     ...createPresenceSlice(...args),
+    ...createRoutesSlice(...args),
   }))
 }
 

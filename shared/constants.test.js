@@ -12,6 +12,7 @@ const EXPECTED_CLIENT_THRESHOLDS_KEYS = [
   'PRESENCE_LIVENESS_TIMEOUT_MS',
   'TELEMETRY_HISTORY_CAP_PER_SIGNAL',
   'ANOMALY_LOG_CAP',
+  'AUDIT_TRAIL_CAP',
   'RENDER_COALESCE_MAX_COMMITS_PER_SEC',
   'BREAKER_PROBE_INTERVAL_MS',
   'RECONNECT_BACKOFF_INITIAL_MS',
@@ -178,5 +179,9 @@ describe('shared/constants', () => {
 
   it('sizes the anomaly log cap to match its sibling telemetry-history cap (story 4 design notes, AD-18)', () => {
     expect(CLIENT_THRESHOLDS.ANOMALY_LOG_CAP).toBe(CLIENT_THRESHOLDS.TELEMETRY_HISTORY_CAP_PER_SIGNAL)
+  })
+
+  it('sizes the audit trail cap to match its sibling caps (story 7 design notes, AD-10)', () => {
+    expect(CLIENT_THRESHOLDS.AUDIT_TRAIL_CAP).toBe(CLIENT_THRESHOLDS.TELEMETRY_HISTORY_CAP_PER_SIGNAL)
   })
 })
