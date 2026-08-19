@@ -27,6 +27,12 @@
 // real `fleet_reset`/`truck_alert` handlers into the WS message switch,
 // previously falling to `default: return`.
 //
+// Story 10 adds one more read on that same tick: `setTransportCounters()`,
+// pulled from the three managers' already-existing read-only getters (plus
+// `sseManager`'s new `getEventsPerSecond()`) into `obs.transportCounters` —
+// the seam `DevMetrics` (FR-30) reads from. No new interval, no new fetch or
+// subscription path (Boundaries & Constraints).
+//
 // `getBootstrap()` is memoized at module scope so React 19 StrictMode's
 // dev-only double-invoke of effects (mount -> cleanup -> mount) never opens
 // a second SSE/WS connection or fires a second `getFleet()` — the actual
@@ -226,6 +232,20 @@ function createBootstrap(): Bootstrap {
     store.getState().setFleetFetchFailing(apiClient.getBreakerState() === 'open')
     tickEffectiveTrust(store.getState())
     store.getState().sweepStalePresence(Date.now()) // FR-19 liveness sweep, piggybacked on this same tick
+    // FR-30/story 10: transport obs counters, read (never computed) from
+    // the three managers' own getters — `wsManager` is always assigned by
+    // the time this interval callback can run (it fires no earlier than the
+    // next tick after `createBootstrap()` finishes), the `?? ` fallbacks
+    // below exist only to satisfy the forward-reference type, not because
+    // the undefined branch is actually reachable in production.
+    store.getState().setTransportCounters({
+      sseDroppedMessages: sseManager.getDroppedMessageCount(),
+      sseReconnects: sseManager.getReconnectCount(),
+      sseEventsPerSecond: sseManager.getEventsPerSecond(),
+      wsDroppedMessages: wsManager?.getDroppedMessageCount() ?? 0,
+      wsReconnects: wsManager?.getReconnectCount() ?? 0,
+      wsLastPingRttMs: wsManager?.getLastPingRttMs() ?? null,
+    })
   }, CLIENT_THRESHOLDS.STALENESS_TICK_MS)
 
   return { store }

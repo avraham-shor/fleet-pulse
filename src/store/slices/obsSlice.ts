@@ -18,6 +18,10 @@ import type { FleetPulseStore } from '../store.ts'
 export interface TransportCounters {
   sseDroppedMessages: number
   sseReconnects: number
+  /** FR-30/story 10: sse-manager's rolling events/sec getter, polled onto
+   * this passthrough the same way every other field here is — nothing in
+   * this slice computes it. */
+  sseEventsPerSecond: number
   wsDroppedMessages: number
   wsReconnects: number
   wsLastPingRttMs: number | null
@@ -41,7 +45,14 @@ export interface ObsSlice {
 }
 
 function createInitialTransportCounters(): TransportCounters {
-  return { sseDroppedMessages: 0, sseReconnects: 0, wsDroppedMessages: 0, wsReconnects: 0, wsLastPingRttMs: null }
+  return {
+    sseDroppedMessages: 0,
+    sseReconnects: 0,
+    sseEventsPerSecond: 0,
+    wsDroppedMessages: 0,
+    wsReconnects: 0,
+    wsLastPingRttMs: null,
+  }
 }
 
 function createAnomalyLog(): BoundedBuffer<AnomalyEntry> {

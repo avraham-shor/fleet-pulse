@@ -248,6 +248,75 @@ describe('sse-manager', () => {
     expect(onConnectionChange).toHaveBeenLastCalledWith(true)
   })
 
+  it('FR-30: getEventsPerSecond() is a rolling rate over the last SSE_EVENTS_PER_SEC_WINDOW_MS, counting every frame received (parseable or not)', () => {
+    let currentMs = 0
+    const { manager, instances } = (() => {
+      const instancesLocal: FakeEventSource[] = []
+      const onBatch = vi.fn()
+      const m = createSseManager({
+        onBatch,
+        createEventSource: (url) => {
+          const source = new FakeEventSource(url)
+          instancesLocal.push(source)
+          return source
+        },
+        now: () => currentMs,
+      })
+      return { manager: m, instances: instancesLocal }
+    })()
+
+    manager.connect()
+    instances[0]!.simulateOpen()
+    expect(manager.getEventsPerSecond()).toBe(0) // nothing received yet
+
+    // Five frames (one malformed) all inside the window.
+    instances[0]!.simulateMessage(SAMPLE_BATCH)
+    currentMs += 100
+    instances[0]!.simulateMessage(SAMPLE_BATCH)
+    currentMs += 100
+    instances[0]!.simulateFrame('not json{') // still counts — every frame, not just parseable ones
+    currentMs += 100
+    instances[0]!.simulateMessage(SAMPLE_BATCH)
+    currentMs += 100
+    instances[0]!.simulateMessage(SAMPLE_BATCH)
+
+    const windowSeconds = CLIENT_THRESHOLDS.SSE_EVENTS_PER_SEC_WINDOW_MS / 1000
+    expect(manager.getEventsPerSecond()).toBeCloseTo(5 / windowSeconds)
+
+    // Advance past the window entirely — every counted frame ages out.
+    currentMs += CLIENT_THRESHOLDS.SSE_EVENTS_PER_SEC_WINDOW_MS + 1
+    expect(manager.getEventsPerSecond()).toBe(0)
+  })
+
+  it('code-review patch: close() clears the events/sec rolling window — a fresh connect() never carries over pre-close activity', () => {
+    let currentMs = 0
+    const instances: FakeEventSource[] = []
+    const manager = createSseManager({
+      onBatch: vi.fn(),
+      createEventSource: (url) => {
+        const source = new FakeEventSource(url)
+        instances.push(source)
+        return source
+      },
+      now: () => currentMs,
+    })
+
+    manager.connect()
+    instances[0]!.simulateOpen()
+    instances[0]!.simulateMessage(SAMPLE_BATCH)
+    instances[0]!.simulateMessage(SAMPLE_BATCH)
+    expect(manager.getEventsPerSecond()).toBeGreaterThan(0) // pre-close activity recorded
+
+    manager.close()
+    manager.connect() // a brand-new, unrelated connection attempt
+    expect(instances).toHaveLength(2)
+
+    // No frame has arrived on the new connection yet — the reading must be
+    // 0 immediately, not carrying the pre-close count until it naturally
+    // ages out of the rolling window.
+    expect(manager.getEventsPerSecond()).toBe(0)
+  })
+
   it('close() tears the connection down for good — no further reconnect attempts', () => {
     const { manager, instances } = setup()
     manager.connect()

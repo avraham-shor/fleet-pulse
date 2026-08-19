@@ -1,0 +1,58 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.heading {
+  margin: 0;
+  font-size: 16px;
+}
+
+.empty {
+  margin: 0;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--text, #6b6375);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, #e5e4e7);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.truckId {
+  font-weight: 600;
+}
+
+.rule {
+  color: var(--text, #6b6375);
+}
+
+.rawValue {
+  color: var(--text, #6b6375);
+  font-family: monospace;
+}
+
+.timestamp {
+  margin-left: auto;
+  color: var(--text, #6b6375);
+  font-size: 12px;
+}

@@ -93,6 +93,14 @@ export const CLIENT_THRESHOLDS = Object.freeze({
   // sized to match its sibling caps rather than inventing an unrelated
   // number.
   TRUCK_ALERT_CAP: 300,
+
+  // FR-30/story 10: the rolling sampling window sse-manager's events/sec
+  // counter divides by (Design Notes: "count of messages in the last N ms,
+  // divided by N/1000"). No existing constant covered this — free parameter
+  // (AD-2), wide enough to smooth over the 2s telemetry tick (a couple of
+  // ticks' worth) without lagging a reconnect-driven rate change so long
+  // it reads as stuck.
+  SSE_EVENTS_PER_SEC_WINDOW_MS: 5_000,
 })
 
 // --- Server emission parameters --------------------------------------------

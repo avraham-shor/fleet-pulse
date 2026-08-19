@@ -12,6 +12,10 @@
 // retry uses a fixed delay that doesn't match the spec'd 1s-doubling-to-15s
 // curve, so this closes and recreates the EventSource itself on error,
 // mirroring ws-manager's reconnect loop (story Design Notes).
+//
+// Story 10 adds `getEventsPerSecond()` — FR-30's one net-new metric, with no
+// prior groundwork — mirroring the existing dropped/reconnect counters'
+// style rather than a new abstraction (Design Notes).
 
 import type { TelemetryBatch } from '../contract/telemetry.ts'
 import { CLIENT_THRESHOLDS } from '../../shared/constants.js'
@@ -46,6 +50,11 @@ export interface CreateSseManagerOptions {
   createEventSource?: (url: string) => EventSourceLike
   setTimeoutImpl?: typeof setTimeout
   clearTimeoutImpl?: typeof clearTimeout
+  /** Clock used for the events/sec rolling window (FR-30, story 10);
+   * defaults to `Date.now`. Explicit injection over relying on a test's
+   * fake-timer `Date` mocking, matching `ws-manager`'s own `now` option and
+   * `api-client`'s pattern (DECISIONS.md, story 1.3). */
+  now?: () => number
 }
 
 export interface SseManager {
@@ -62,6 +71,20 @@ export interface SseManager {
    * every time a scheduled backoff timer fires, not the initial
    * `connect()` (FR-30 obs, story 10's developer panel). */
   getReconnectCount(): number
+  /** SSE events/sec (FR-30, story 10): a rolling count of frames received
+   * in the last `SSE_EVENTS_PER_SEC_WINDOW_MS`, divided by the window in
+   * seconds — mirrors the dropped/reconnect counters' style rather than
+   * introducing a new metrics abstraction (Design Notes). Counts every
+   * frame the underlying `EventSource` delivers, parseable or not — this is
+   * a transport-activity rate, not a parse-success rate (the dropped-count
+   * getter already covers parse failures separately). Known limitation
+   * (code-review finding, matches the story's own Design Notes — a fixed-
+   * window average, not an elapsed-time-based one): divides by the full
+   * window width rather than by time-since-oldest-counted-frame, so for the
+   * first `SSE_EVENTS_PER_SEC_WINDOW_MS` after a fresh `connect()` (or any
+   * quiet gap), the reported rate under-reports the real instantaneous
+   * rate; it self-corrects once the window fills with real frames. */
+  getEventsPerSecond(): number
 }
 
 function defaultCreateEventSource(url: string): EventSourceLike {
@@ -85,11 +108,17 @@ export function createSseManager(options: CreateSseManagerOptions): SseManager {
   const createEventSource = options.createEventSource ?? defaultCreateEventSource
   const setTimeoutImpl = options.setTimeoutImpl ?? setTimeout
   const clearTimeoutImpl = options.clearTimeoutImpl ?? clearTimeout
+  const now = options.now ?? Date.now
 
   let source: EventSourceLike | null = null
   let closedByUser = false
   let droppedMessageCount = 0
   let reconnectCount = 0
+  // FR-30 events/sec: timestamps of frames received within the current
+  // rolling window, oldest first — pruned lazily (on the next record or
+  // read) rather than by its own timer, same "no extra interval" spirit as
+  // the rest of this module's backoff/reconnect bookkeeping.
+  let eventTimestamps: number[] = []
   // `CLIENT_THRESHOLDS` is `Object.freeze`d, so TS infers its properties as
   // literal types (e.g. `1000`, not `number`) — annotate explicitly so
   // reassignment below (doubling toward the cap) type-checks.
@@ -118,7 +147,20 @@ export function createSseManager(options: CreateSseManagerOptions): SseManager {
     )
   }
 
+  function pruneEventWindow(nowMs: number): void {
+    const cutoff = nowMs - CLIENT_THRESHOLDS.SSE_EVENTS_PER_SEC_WINDOW_MS
+    while (eventTimestamps.length > 0 && eventTimestamps[0]! < cutoff) eventTimestamps.shift()
+  }
+
   function handleRawFrame(raw: unknown) {
+    // FR-30: every frame the connection actually delivers counts toward
+    // events/sec, whether it goes on to parse successfully or not — this
+    // metric answers "how active is the stream," not "how much of it is
+    // valid" (the separate dropped-count getter already answers that).
+    const receivedAtMs = now()
+    eventTimestamps.push(receivedAtMs)
+    pruneEventWindow(receivedAtMs)
+
     let parsed: unknown
     try {
       parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
@@ -184,12 +226,23 @@ export function createSseManager(options: CreateSseManagerOptions): SseManager {
       closedByUser = true
       cancelReconnect()
       closeCurrentSource()
+      // FR-30/code-review patch: a deliberate close() followed by a fresh
+      // connect() must not carry pre-close activity into the new
+      // connection's events/sec reading — unlike the lifetime
+      // dropped/reconnect counters (intentionally cumulative across
+      // reconnects), this is a *rate*, and a closed connection has no
+      // "current" rate to report.
+      eventTimestamps = []
     },
     getDroppedMessageCount() {
       return droppedMessageCount
     },
     getReconnectCount() {
       return reconnectCount
+    },
+    getEventsPerSecond() {
+      pruneEventWindow(now())
+      return eventTimestamps.length / (CLIENT_THRESHOLDS.SSE_EVENTS_PER_SEC_WINDOW_MS / 1000)
     },
   }
 }

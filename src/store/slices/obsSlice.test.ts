@@ -27,6 +27,20 @@ describe('obsSlice', () => {
     expect(store.getState().obs.transportCounters).toMatchObject({ sseDroppedMessages: 3, wsReconnects: 2 })
   })
 
+  it('FR-30: transportCounters starts at zero/null, including the new sseEventsPerSecond field, and setTransportCounters merges it like every other field', () => {
+    const store = createFleetPulseStore()
+    expect(store.getState().obs.transportCounters).toEqual({
+      sseDroppedMessages: 0,
+      sseReconnects: 0,
+      sseEventsPerSecond: 0,
+      wsDroppedMessages: 0,
+      wsReconnects: 0,
+      wsLastPingRttMs: null,
+    })
+    store.getState().setTransportCounters({ sseEventsPerSecond: 4.5 })
+    expect(store.getState().obs.transportCounters).toMatchObject({ sseEventsPerSecond: 4.5, wsDroppedMessages: 0 })
+  })
+
   it('AD-18/AD-17: resetObs wipes the anomaly log but obs counters survive', () => {
     const store = createFleetPulseStore()
     store.getState().pushAnomalies([{ ruleId: 'speed-sensor-fault', truckId: 'truck_7', rawValue: 999, readingTs: 1_000, arrivalTs: 1_010 }])

@@ -128,3 +128,9 @@
 - source_spec: `_bmad-output/specs/spec-Fleet-Pulse/stories/9-vehicle-detail-panel-resilience-and-degraded-mode.md`
   summary: Two small pieces of logic now exist in two independent copies with no shared helper: `describeFailure` (a `TransportFailure`-to-message switch) in both `VehicleDetail.tsx` and `RoutesPanel.tsx`, and truck→active-route filtering in both `routesSlice.ts`'s new `selectRouteForTruck` and `RoutesPanel.tsx`'s pre-existing local `findActiveRouteForTruck`.
   evidence: Confirmed by reading both pairs directly — same shape, same logic, no shared import. Zero functional impact today (both copies agree), same category as story 1.7's "two separate ApiClient instances" finding: real duplication, more plumbing to extract a shared helper than the zero-impact payoff justifies right now. Worth consolidating in a later cleanup pass if either drifts.
+
+## Deferred from: code review of story-1.10 (2026-08-19)
+
+- source_spec: `_bmad-output/specs/spec-Fleet-Pulse/stories/10-observability-and-submission-traceability.md`
+  summary: Neither of this story's two new live-updating widgets (`AnomalyView`'s growing list, `DevMetrics`' changing counters) carries an `aria-live`/`role="status"` region, so assistive technology gets no notification when new anomalies land or metrics change.
+  evidence: Same accepted-gap category as stories 1.5's, 1.6's, and 1.9's identical findings — no accessibility requirement (WCAG, screen-reader support, etc.) exists anywhere in this project's FRs/NFRs, so inventing one here is out of scope. Revisit together with the other logged instances if a later requirements pass adds an accessibility bar.

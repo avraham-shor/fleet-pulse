@@ -501,3 +501,116 @@ findings applied:
 
 Verified after all 8 patches: `npm test` (76/76, re-run twice with no flake), `npm run
 lint` (clean, `--max-warnings 0`), `npm run build` (`tsc -b` + `vite build`, clean).
+
+## Story 1.10 — Observability and submission traceability
+
+**`AnomalyView` selects `state.obs` itself, not `state.obs.anomalyLog`.** A code-review-
+grade catch made while writing the widget's own rerender test: `pushAnomaliesPure`
+(`obsSlice.ts`) mutates the `BoundedBuffer` in place via `.push()` and only ever replaces
+the *outer* `obs` object (`{ ...obs }`), so `state.obs.anomalyLog`'s own reference never
+changes across a push. A selector narrowed to `anomalyLog` directly would never be seen
+as "changed" by Zustand's snapshot comparison — the widget would silently freeze at
+whatever anomalies existed on mount and never update live again. Selecting `state.obs`
+instead (which *is* replaced on every non-empty push, and deliberately left unchanged for
+an empty one — the slice's own no-op case) is what actually observes a fresh commit;
+`RoutesPanel.tsx`'s `routesState` selector already follows the identical pattern for the
+same reason, so this isn't a new convention, just a previously-untested corner of an
+established one. (FR-29, AD-18)
+
+**SSE events/sec counts every frame received, not just parseable ones.** `sse-manager.ts`'s
+new `getEventsPerSecond()` records a timestamp in `handleRawFrame` before the
+parse/shape-check branches run, so a malformed frame still counts toward the rate — this
+metric answers "how active is the stream," which the existing, separate
+`getDroppedMessageCount()` doesn't overlap with (that one answers "how much of it failed
+to parse"). Implemented as a rolling window (an array of receive timestamps, pruned lazily
+on the next record or read) rather than a fixed-interval sampler, mirroring the existing
+dropped/reconnect counters' plain-getter style per the story's own Design Notes rather than
+introducing a new metrics abstraction. The window width (`SSE_EVENTS_PER_SEC_WINDOW_MS`,
+5s) is a free parameter (AD-2) — sized to smooth over more than one 2s telemetry tick
+without lagging a reconnect-driven rate change so long it reads as stuck; a dedicated
+constants test pins it above `TELEMETRY_TICK_MS`. (FR-30, AD-2)
+
+**No breaker/circuit state surfaced into `DevMetrics`, despite `api-client.getBreakerState()`
+being named alongside the other read-only getters in the story's Boundaries.** FR-30's own
+text and the story's I/O & Edge-Case Matrix both list exactly four metrics — SSE events/sec,
+WS ping/pong RTT, dropped/discarded events, reconnection counts — with no mention of circuit
+state; read the Boundaries' mention as documenting *which* existing periodic tick this
+story's wiring piggybacks on (the one that already polls `getBreakerState()` for
+`health.fleetFetchFailing`, story 9), not as a fifth field to add. Stayed inside the
+narrower, more specific reading rather than growing `TransportCounters` with a field no
+acceptance criterion or I/O-matrix row asks for. (FR-30)
+
+**`TransportCounters` gains one field (`sseEventsPerSecond`), the mechanism itself untouched.**
+The story's Code Map calls `obsSlice.ts`'s `transportCounters`/`setTransportCounters`/
+`anomalyLog` "already declared; consume as-is, do not rebuild" — read as "don't redesign
+the passthrough-plus-partial-patch pattern," not "never add a field it needs to carry."
+`setTransportCounters(patch: Partial<TransportCounters>)` already supported partial
+updates by construction, so adding the one new field FR-30 actually requires was the
+minimal change the existing mechanism was built to absorb. (FR-30, AD-18)
+
+**`bootstrap.ts`'s existing staleness tick gains one more read, no new interval.** Story
+9's tick already polls the circuit breaker, re-evaluates effective trust, and sweeps stale
+presence once a second; `setTransportCounters()` is appended there, reading the three
+managers' getters (`sse-manager`'s dropped/reconnect/events-per-sec, `ws-manager`'s
+dropped/reconnect/RTT) — no second `setInterval`, matching the Boundaries' explicit "the
+same one already polling breaker state" instruction. (FR-30, AD-8)
+
+**README's placeholder replaced with the full CAP-10 write-up**, not appended alongside
+it: an architecture/data-flow walkthrough (SSE → pipeline → store → UI, and WS → store,
+traced against the real module boundaries rather than restated from the architecture
+spine), key decisions and trade-offs, the FR-31/FR-13 multi-dispatcher conflict-handling
+section (avoidance before a save, resolution at save time, both riding the same WS echo
+every dispatcher already receives), known issues and what's next (cross-referencing
+`deferred-work.md` rather than duplicating its content), and the NFR-9 tire-pressure
+worked example enumerating the exact files a ninth signal would touch — one pipeline
+import line, one contract field, one `SignalName` union member — versus the new files it
+would add. (G5, NFR-9)
+
+**`test-matrix.md` gains two new self-imposed rows (FR-29, FR-30), matching FR-25/FR-34's
+existing "*(self-imposed)*" convention** rather than the mandated-six-areas convention —
+observability isn't one of the assignment's own "hard parts" categories, but it's a real
+product surface this build gives dedicated, FR-cited test coverage to, same as the breaker
+and busy-truck-creation-guard rows already did. The table's own summary line updated from
+"Sixteen or more" to "Twenty or more" to stay accurate against the two added rows. (G5)
+
+Verified: `npm test` (344/344, re-run twice back to back with no flake), `npm run lint`
+(clean, `--max-warnings 0`), `npm run build` (`tsc -b` across both projects + `vite
+build`, clean).
+
+### Code review pass (coordinator-relayed, 3 patch-category findings)
+
+Adversarial review against this story's diff, relayed by the coordinator (not run
+directly this pass). All 3 findings classified `patch` (real, in-scope, trivially
+fixable, no human input needed) — applied directly:
+
+- **`AnomalyView.tsx` `data-testid`/`key` mismatch.** `AnomalyRow`'s `data-testid` was
+  scoped to `truckId`+`readingTs` only, while the `key` on the same list item (and this
+  entry's own code comment) already acknowledged that pair isn't guaranteed unique across
+  two anomalies. Two entries sharing both fields would collide on `data-testid` —
+  `getByTestId` throws on more than one match — even though `key` correctly told them
+  apart. Fixed by threading `index` into `AnomalyRow` and appending it to `data-testid`
+  the same way `key` already used it. Updated the two existing tests asserting an exact
+  testid string to append `-0` (both were the sole/first-rendered entry); added a new test
+  pushing two anomalies with an identical `truckId`+`readingTs` and asserting both testids
+  resolve to distinct, individually-queryable elements. (FR-29)
+- **`sse-manager.ts` `close()` never reset the events/sec rolling window.** Unlike the
+  lifetime `droppedMessageCount`/`reconnectCount` counters (intentionally cumulative
+  across reconnects), `eventTimestamps` backs a *rate*, and a deliberate `close()`
+  followed by a fresh `connect()` was carrying pre-close timestamps into the new
+  connection's `getEventsPerSecond()` reading until they aged out of the window on their
+  own (up to `SSE_EVENTS_PER_SEC_WINDOW_MS`). Fixed by clearing `eventTimestamps = []`
+  inside `close()`. New regression test: record events, `close()`, `connect()` again, and
+  assert `getEventsPerSecond()` reads `0` immediately post-reconnect, before any new frame
+  arrives. (FR-30)
+- **`getEventsPerSecond()`'s cold-start under-report, documented not changed.** Dividing
+  by the *fixed* window width rather than by elapsed-time-since-oldest-counted-frame means
+  the reported rate under-reports for the first `SSE_EVENTS_PER_SEC_WINDOW_MS` after a
+  fresh `connect()` or any quiet gap — matches the story's own Design Notes (a fixed-window
+  average was the specified algorithm), so this is a documentation fix, not an algorithm
+  change. Added a one-line limitation comment on `getEventsPerSecond()`'s JSDoc and a
+  matching bullet in README's "Known issues and what's next," both noting it self-corrects
+  once the window fills. (FR-30)
+
+Re-verified after all 3 patches: `npm test` (346/346, re-run twice with no flake), `npm
+run lint` (clean, `--max-warnings 0`), `npm run build` (`tsc -b` across both projects +
+`vite build`, clean).

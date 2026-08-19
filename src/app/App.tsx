@@ -15,6 +15,8 @@ import '../ui/widgets/fleetOverview/FleetOverview.tsx'
 import '../ui/widgets/presence/PresencePanel.tsx'
 import '../ui/widgets/routes/RoutesPanel.tsx'
 import '../ui/widgets/vehicleDetail/VehicleDetail.tsx'
+import '../ui/widgets/anomalyView/AnomalyView.tsx'
+import '../ui/widgets/devMetrics/DevMetrics.tsx'
 import styles from './App.module.css'
 
 export default function App() {

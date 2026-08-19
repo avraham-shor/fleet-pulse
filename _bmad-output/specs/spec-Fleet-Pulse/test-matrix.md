@@ -12,8 +12,10 @@ The assignment mandates a minimum of eight meaningful tests over the hard parts.
 | Ghost dispatcher presence | FR-19 | 3 | late/duplicate disconnect is a safe no-op; liveness timeout removes a silent ghost; a late disconnect never removes a re-registered dispatcher (new identity) |
 | Circuit breaker *(self-imposed)* | FR-25 | 1 | 3×503 opens; probe honors max(interval, `Retry-After`); success closes |
 | Busy-truck creation guard *(self-imposed)* | FR-34 | 1 | creating a route for a truck with an active one requires confirmation |
+| Anomaly view rendering *(self-imposed)* | FR-29 | 2 | anomalies present → every entry shows truck id, rule/type, and timestamp, sourced only from `obs.anomalyLog`; no anomalies yet → explicit empty state, never blank |
+| Developer metrics panel *(self-imposed)* | FR-30 | 2 | healthy transport → live SSE events/sec, WS ping/pong RTT, zero dropped/reconnect counts; dropped/reconnect activity → reflected on the next tick, no new fetch/subscription path |
 
-**Sixteen or more cases total.**
+**Twenty or more cases total.**
 
 ## Structural assertions
 

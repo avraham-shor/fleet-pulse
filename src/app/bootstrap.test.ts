@@ -455,6 +455,46 @@ describe('getBootstrap: health slice wiring (AD-9, FR-25, FR-26)', () => {
   })
 })
 
+describe('getBootstrap: transport obs counters wiring (FR-30, story 10)', () => {
+  it('populates obs.transportCounters from the real sse/ws managers on the existing staleness tick — no new interval, no new fetch path', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+    const { getBootstrap } = await freshBootstrapWithWs()
+    const { store } = getBootstrap()
+
+    // Starts at the obsSlice defaults — nothing populated before the first tick.
+    expect(store.getState().obs.transportCounters).toEqual({
+      sseDroppedMessages: 0,
+      sseReconnects: 0,
+      sseEventsPerSecond: 0,
+      wsDroppedMessages: 0,
+      wsReconnects: 0,
+      wsLastPingRttMs: null,
+    })
+
+    // Drive real activity through the real managers: an SSE dropped frame
+    // and a WS dropped frame, checked on the very next tick (while the SSE
+    // frame is still inside its rolling events/sec window)...
+    FakeEventSource.instances[0]!.onmessage?.({ data: 'not json{' })
+    FakeWebSocket.instances[0]!.simulateOpen()
+    FakeWebSocket.instances[0]!.onmessage?.({ data: 'not json{' })
+    await vi.advanceTimersByTimeAsync(CLIENT_THRESHOLDS.STALENESS_TICK_MS)
+
+    const firstTickCounters = store.getState().obs.transportCounters
+    expect(firstTickCounters.sseDroppedMessages).toBe(1)
+    expect(firstTickCounters.wsDroppedMessages).toBe(1)
+    expect(firstTickCounters.sseEventsPerSecond).toBeGreaterThan(0)
+    expect(firstTickCounters.wsLastPingRttMs).toBeNull() // no ping round trip yet
+
+    // ...then a completed ping/pong round trip, checked on a later tick —
+    // the RTT getter's own value, not re-derived here.
+    await vi.advanceTimersByTimeAsync(CLIENT_THRESHOLDS.WS_KEEPALIVE_PING_MS) // fires one ping
+    FakeWebSocket.instances[0]!.simulateServerMessage({ type: 'pong' })
+    await vi.advanceTimersByTimeAsync(CLIENT_THRESHOLDS.STALENESS_TICK_MS)
+
+    expect(store.getState().obs.transportCounters.wsLastPingRttMs).not.toBeNull()
+  })
+})
+
 describe('getBootstrap: truck_alert wiring (FR-32, CM1)', () => {
   it('FR-32: a truck_alert WS message lands in the fleet slice via addTruckAlert', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))

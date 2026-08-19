@@ -25,6 +25,7 @@ const EXPECTED_CLIENT_THRESHOLDS_KEYS = [
   'RECONNECT_BACKOFF_MULTIPLIER',
   'BREAKER_FAILURE_THRESHOLD',
   'TRUCK_ALERT_CAP',
+  'SSE_EVENTS_PER_SEC_WINDOW_MS',
 ]
 
 const EXPECTED_SERVER_PARAMS_KEYS = [
@@ -188,5 +189,11 @@ describe('shared/constants', () => {
 
   it('sizes the truck-alert cap to match its sibling caps (story 9 design notes, AD-10)', () => {
     expect(CLIENT_THRESHOLDS.TRUCK_ALERT_CAP).toBe(CLIENT_THRESHOLDS.TELEMETRY_HISTORY_CAP_PER_SIGNAL)
+  })
+
+  it('keeps the SSE events/sec window wide enough to smooth over more than one telemetry tick (story 10 design notes)', () => {
+    // A window no wider than a single tick would make the rate figure swing
+    // wildly between ticks instead of reading as a smoothed rate.
+    expect(CLIENT_THRESHOLDS.SSE_EVENTS_PER_SEC_WINDOW_MS).toBeGreaterThan(SERVER_PARAMS.TELEMETRY_TICK_MS)
   })
 })

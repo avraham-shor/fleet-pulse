@@ -208,6 +208,28 @@ describe('App', () => {
     expect(screen.queryByTestId('degraded-banner')).toBeNull()
   })
 
+  it('AD-6: the anomaly view widget mounts through the shell via its own side-effect import, showing the empty state before any anomaly is logged', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+
+    const App = await freshApp()
+    render(<App />)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(screen.getByRole('heading', { name: 'Anomaly log' })).toBeTruthy()
+    expect(screen.getByText('No anomalies detected this session')).toBeTruthy()
+  })
+
+  it('AD-6: the dev metrics widget mounts through the shell via its own side-effect import, showing zeroed transport counters at boot', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
+
+    const App = await freshApp()
+    render(<App />)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(screen.getByRole('heading', { name: 'Developer metrics' })).toBeTruthy()
+    expect(screen.getByTestId('metric-sse-events-per-sec').textContent).toBe('0.0')
+  })
+
   it('FR-26/FR-27: an SSE error flips the real shell into degraded mode, naming "telemetry stream down"', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(makeResponse(200, [])))
 
